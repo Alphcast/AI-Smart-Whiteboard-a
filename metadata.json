@@ -1,0 +1,6 @@
+{
+  "name": "AI Smart Whiteboard",
+  "description": "An interactive digital whiteboard featuring handwriting mathematics recognition, AI problem solving, step-by-step explanations, and wireless smartphone remote touchpad control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
