@@ -21,13 +21,15 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, path: '/ws' });
 const io = new SocketIOServer(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
   },
   path: '/socket.io/',
+  transports: ['polling', 'websocket'],
+  allowUpgrades: true,
 });
 
 app.use(express.json({ limit: '15mb' }));
@@ -796,20 +798,23 @@ Keep the explanation clear, encouraging, and structured with concise bullet poin
 
 // 11. Smartphone Remote Session Creation
 app.post('/api/remote/sessions', (req, res) => {
-  const { boardId } = req.body;
+  const { boardId, sessionId: reqSessionId, passcode: reqPasscode } = req.body;
   if (!boardId) {
     return res.status(400).json({ success: false, error: { message: 'boardId is required' } });
   }
 
   loadSessionsFromDisk();
 
-  // Generate a friendly 6-character alphanumeric pairing passcode
+  // Use requested passcode if provided and valid, otherwise generate a 6-character alphanumeric pairing passcode
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-  let passcode = '';
-  for (let i = 0; i < 6; i++) {
-    passcode += chars.charAt(Math.floor(Math.random() * chars.length));
+  let passcode = (reqPasscode || '').trim().toUpperCase();
+  if (!passcode || passcode.length < 4) {
+    passcode = '';
+    for (let i = 0; i < 6; i++) {
+      passcode += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
   }
-  const sessionId = `sess-${Date.now()}-${passcode.toLowerCase()}`;
+  const sessionId = reqSessionId || `sess-${Date.now()}-${passcode.toLowerCase()}`;
 
   const sessionObj: ActiveRemoteSession = {
     sessionId,
@@ -1397,10 +1402,23 @@ async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: {
+        middlewareMode: true,
+        hmr: { server },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));

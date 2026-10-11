@@ -17,7 +17,8 @@ export type ToolType =
   | 'triangle'
   | 'line'
   | 'arrow'
-  | 'sticky';
+  | 'sticky'
+  | 'laser';
 
 export type BackgroundPattern = 'blank' | 'grid' | 'dots' | 'lined';
 
@@ -25,22 +26,15 @@ export interface Point {
   x: number;
   y: number;
   pressure?: number;
+  time?: number;
 }
 
 export interface StrokeData {
   points: Point[];
   color: string;
   size: number;
-  opacity: number;
-  tool: 'pen' | 'pencil' | 'highlighter';
-}
-
-export interface ShapeData {
-  shapeType: 'rectangle' | 'circle' | 'triangle' | 'line' | 'arrow';
-  strokeColor: string;
-  fillColor: string;
-  strokeWidth: number;
-  strokeStyle: 'solid' | 'dashed';
+  strokeWidth?: number;
+  tool?: 'pen' | 'pencil' | 'highlighter' | 'eraser';
   opacity: number;
 }
 
@@ -48,20 +42,29 @@ export interface TextData {
   text: string;
   fontSize: number;
   color: string;
-  fontFamily: string;
+  fontFamily?: string;
   bold?: boolean;
   italic?: boolean;
 }
 
+export interface ShapeData {
+  shapeType: 'rectangle' | 'circle' | 'triangle' | 'line' | 'arrow';
+  strokeColor: string;
+  fillColor: string;
+  strokeWidth: number;
+  strokeStyle?: 'solid' | 'dashed';
+  opacity: number;
+}
+
 export interface StickyData {
   text: string;
-  color: string; // e.g. '#fef08a' (yellow), '#bae6fd' (blue), etc.
+  color: string;
 }
 
 export interface MathSolutionStep {
   stepNumber: number;
   expression: string;
-  latex: string;
+  latex?: string;
   explanation: string;
 }
 
@@ -70,35 +73,36 @@ export interface MathSolution {
   latex: string;
   solution: string;
   steps: MathSolutionStep[];
-  difficultyLevel?: 'beginner' | 'student' | 'advanced';
-  method?: string;
-  alternativeMethods?: { method: string; steps: string[] }[];
-  graphPoints?: { x: number; y: number }[];
+  method: string;
+  alternativeMethods?: {
+    method: string;
+    steps: string[];
+  }[];
 }
 
 export interface EquationData {
   rawExpression: string;
   latex: string;
   solution?: MathSolution;
-  status: 'idle' | 'detected' | 'solving' | 'solved' | 'error';
+  status?: 'idle' | 'unsolved' | 'solving' | 'solved' | 'error';
+  error?: string;
   errorMessage?: string;
 }
 
 export interface WhiteboardObject {
   id: string;
   pageId: string;
-  type: 'stroke' | 'shape' | 'text' | 'sticky' | 'equation';
+  type: 'stroke' | 'text' | 'shape' | 'sticky' | 'equation';
   x: number;
   y: number;
   width?: number;
   height?: number;
-  rotation?: number;
   zIndex: number;
   createdAt: string;
   updatedAt: string;
   strokeData?: StrokeData;
-  shapeData?: ShapeData;
   textData?: TextData;
+  shapeData?: ShapeData;
   stickyData?: StickyData;
   equationData?: EquationData;
 }
@@ -111,36 +115,24 @@ export interface WhiteboardPage {
   createdAt: string;
 }
 
-export interface Whiteboard {
-  id: string;
-  title: string;
-  description?: string;
-  pages: WhiteboardPage[];
-  objects: Record<string, WhiteboardObject[]>; // keyed by pageId
-  createdAt: string;
-  updatedAt: string;
-  isStarred?: boolean;
-  isTrash?: boolean;
-  thumbnail?: string;
-  tags?: string[];
-  permission?: 'owner' | 'editor' | 'viewer';
-}
-
-export interface RemoteSession {
-  sessionId: string;
-  boardId: string;
-  passcode: string;
-  connectedDevices: number;
-  lastActive: string;
-  status: 'waiting' | 'connected' | 'disconnected';
-  deviceInfo?: string;
-}
-
 export interface CollaboratorCursor {
   userId: string;
   userName: string;
   color: string;
   x: number;
   y: number;
-  lastUpdated: number;
+}
+
+export interface Whiteboard {
+  id: string;
+  title: string;
+  description?: string;
+  pages: WhiteboardPage[];
+  objects: Record<string, WhiteboardObject[]>;
+  createdAt: string;
+  updatedAt: string;
+  isStarred?: boolean;
+  isTrash?: boolean;
+  tags?: string[];
+  permission?: 'owner' | 'editor' | 'viewer';
 }

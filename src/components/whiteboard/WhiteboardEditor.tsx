@@ -23,7 +23,6 @@ import {
   FileImage,
   FileCode,
   Copy,
-  Activity,
 } from 'lucide-react';
 import {
   Whiteboard,
@@ -39,11 +38,10 @@ import { ToolSettings } from './ToolSettings';
 import { EquationOverlay } from './EquationOverlay';
 import { AIAssistantPanel } from './AIAssistantPanel';
 import { PageNavigator } from './PageNavigator';
-import { ConnectPhoneModal } from '../remote/ConnectPhoneModal';
+import { QRCodeModal } from '../remote/QRCodeModal';
 import { ShareModal } from '../collaboration/ShareModal';
 import { ExportModal } from '../export/ExportModal';
 import { SettingsModal } from '../settings/SettingsModal';
-import { DiagnosticPanel } from './DiagnosticPanel';
 import { OfflineIndicator } from '../pwa/OfflineIndicator';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
@@ -176,10 +174,25 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   } | null>(null);
   const [isPhoneConnected, setIsPhoneConnected] = useState(false);
   const [isRemoteTransmitting, setIsRemoteTransmitting] = useState(false);
-  const [pairedSessionId, setPairedSessionId] = useState<string | null>(null);
-  const [activePasscode, setActivePasscode] = useState<string | null>(null);
-  const [isDiagnosticPanelOpen, setIsDiagnosticPanelOpen] = useState(false);
+  const [pairedSessionId, setPairedSessionId] = useState<string>(() => {
+    return `sess-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  });
+  const [activePasscode, setActivePasscode] = useState<string>(() => {
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+  });
   const transmitTimerRef = useRef<any>(null);
+
+  // Automatically bind display socket for immediate phone pairing
+  useEffect(() => {
+    if (pairedSessionId && activePasscode) {
+      socket.bindRemote(pairedSessionId, 'display', activePasscode);
+    }
+  }, [pairedSessionId, activePasscode]);
 
   const markTransmissionActive = useCallback(() => {
     setIsPhoneConnected(true);
@@ -1053,20 +1066,6 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
             )}
           </button>
 
-          {/* Real-time Socket & Connection Diagnostics Panel Toggle */}
-          <button
-            onClick={() => setIsDiagnosticPanelOpen(!isDiagnosticPanelOpen)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border cursor-pointer ${
-              isDiagnosticPanelOpen
-                ? 'bg-blue-600 text-white border-blue-700 shadow-sm'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
-            }`}
-            title="Open Live Socket Events & Vercel Connection Diagnostics"
-          >
-            <Activity className={`w-4 h-4 ${isPhoneConnected ? 'text-emerald-500 animate-pulse' : 'text-blue-600'}`} />
-            <span className="hidden sm:inline">Diagnostics</span>
-          </button>
-
           {/* AI Math Tutor Panel Toggle */}
           <button
             onClick={() => setIsAIPanelOpen(!isAIPanelOpen)}
@@ -1291,34 +1290,33 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       </div>
 
       {/* Modals */}
-      <ConnectPhoneModal
+      <QRCodeModal
         isOpen={isPhoneModalOpen}
         onClose={() => setIsPhoneModalOpen(false)}
         boardId={board.id}
+        sessionId={pairedSessionId}
+        passcode={activePasscode}
         isPhoneConnected={isPhoneConnected}
         onPhoneConnectionChange={setIsPhoneConnected}
         onSessionReady={(sessId, pass) => {
-          setPairedSessionId(sessId);
-          setActivePasscode(pass || null);
+          if (sessId) setPairedSessionId(sessId);
+          if (pass) setActivePasscode(pass);
           socket.bindRemote(sessId, 'display', pass);
         }}
-      />
-
-      <DiagnosticPanel
-        isOpen={isDiagnosticPanelOpen}
-        onClose={() => setIsDiagnosticPanelOpen(false)}
-        boardId={board.id}
-        remotePointer={remotePointer}
-        isPhoneConnected={isPhoneConnected}
-        pairedSessionId={pairedSessionId}
-        activePasscode={activePasscode}
-        onToast={showToast}
       />
 
       <ShareModal
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         board={board}
+        sessionId={pairedSessionId}
+        passcode={activePasscode}
+        isPhoneConnected={isPhoneConnected}
+        onPhoneConnectionChange={setIsPhoneConnected}
+        onOpenPhoneRemote={() => {
+          setIsShareModalOpen(false);
+          setIsPhoneModalOpen(true);
+        }}
       />
 
       <ExportModal

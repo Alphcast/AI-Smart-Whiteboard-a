@@ -71,6 +71,28 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   const [pressureCurve, setPressureCurve] = useState<'linear' | 'ease-in' | 'expressive'>('expressive');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [liveTouchPressure, setLiveTouchPressure] = useState<number>(0);
+  // Touchpad Cursor Tracking Speed Sensitivity (0.5x to 5.0x)
+  const [cursorSensitivity, setCursorSensitivity] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('phone_remote_cursor_sensitivity');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.5 && parsed <= 5.0) return parsed;
+      }
+    }
+    return 2.3;
+  });
+
+  const handleCursorSensitivityChange = useCallback((val: number) => {
+    setCursorSensitivity(val);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('phone_remote_cursor_sensitivity', val.toString());
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
   const lastTouchTime = useRef<number>(0);
   const smoothedPressure = useRef<number>(1.0);
 
@@ -619,8 +641,8 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     if (!lastTouch.current || !isTouchpadDown.current) return;
 
     const touch = e.touches[0];
-    const dx = (touch.clientX - lastTouch.current.x) * 2.3;
-    const dy = (touch.clientY - lastTouch.current.y) * 2.3;
+    const dx = (touch.clientX - lastTouch.current.x) * cursorSensitivity;
+    const dy = (touch.clientY - lastTouch.current.y) * cursorSensitivity;
 
     const now = Date.now();
     const dt = Math.max(1, now - (lastTouchTime.current || now));
@@ -1009,6 +1031,29 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                   <span>Math</span>
                 </button>
               </div>
+            </div>
+
+            {/* Touchpad Cursor Tracking Speed Sensitivity Slider */}
+            <div className="px-3.5 py-2 bg-slate-900/95 border-b border-slate-800 flex items-center justify-between gap-2.5 text-xs shrink-0 select-none">
+              <div className="flex items-center gap-1.5 text-slate-300 font-medium shrink-0">
+                <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                <span className="text-[11px] font-semibold">Speed:</span>
+              </div>
+              <div className="flex items-center gap-2 flex-1 max-w-[220px]">
+                <input
+                  type="range"
+                  min="0.5"
+                  max="5.0"
+                  step="0.1"
+                  value={cursorSensitivity}
+                  onChange={(e) => handleCursorSensitivityChange(parseFloat(e.target.value))}
+                  className="w-full accent-blue-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  aria-label="Cursor tracking speed"
+                />
+              </div>
+              <span className="font-mono text-blue-400 font-bold text-[11px] bg-slate-800 px-2 py-0.5 rounded border border-slate-700/60 shrink-0">
+                {cursorSensitivity.toFixed(1)}x
+              </span>
             </div>
 
             {/* Interactive Touchpad Surface */}
@@ -1422,6 +1467,57 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               >
                 ✕
               </button>
+            </div>
+
+            {/* Touchpad Cursor Tracking Speed Sensitivity */}
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                  <Sliders className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Touchpad Cursor Tracking Speed</span>
+                </div>
+                <span className="font-mono text-blue-400 font-bold bg-slate-800 px-2 py-0.5 rounded text-[10px]">
+                  {cursorSensitivity.toFixed(1)}x
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="5.0"
+                step="0.1"
+                value={cursorSensitivity}
+                onChange={(e) => handleCursorSensitivityChange(parseFloat(e.target.value))}
+                className="w-full accent-blue-500 cursor-pointer"
+                aria-label="Cursor sensitivity slider"
+              />
+              <div className="flex justify-between text-[9px] text-slate-500 font-medium">
+                <span>Fine (0.5x)</span>
+                <span>Normal (2.3x)</span>
+                <span>Fast (5.0x)</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                {[
+                  { label: 'Precision', val: 1.0 },
+                  { label: 'Default', val: 2.3 },
+                  { label: 'Fast', val: 3.5 },
+                  { label: 'Max', val: 5.0 },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      handleCursorSensitivityChange(preset.val);
+                      triggerHaptic(10);
+                    }}
+                    className={`py-1.5 px-1 text-[10px] rounded-lg border text-center transition-colors cursor-pointer ${
+                      Math.abs(cursorSensitivity - preset.val) < 0.1
+                        ? 'bg-blue-600 border-blue-500 text-white font-bold shadow-xs'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Toggle Switch */}

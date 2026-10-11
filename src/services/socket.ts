@@ -147,13 +147,16 @@ class RealtimeSocketClient {
     try {
       this.socket = io(origin, {
         path: '/socket.io/',
-        transports: ['websocket', 'polling'],
+        // Explicit support for HTTP long-polling fallback to guarantee stability on restrictive networks like Vercel serverless
+        transports: ['polling', 'websocket'],
+        upgrade: true,
+        rememberUpgrade: true,
         autoConnect: true,
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        timeout: 10000,
+        timeout: 15000,
       });
 
       this.socket.on('connect', () => {
@@ -257,6 +260,10 @@ class RealtimeSocketClient {
       });
 
       this.socket.on('connect_error', (error) => {
+        // Explicitly enforce polling transport fallback when connecting fails or websocket is blocked
+        if (this.socket && (this.socket as any).io?.opts) {
+          (this.socket as any).io.opts.transports = ['polling', 'websocket'];
+        }
         this.recordDiagnostic('socketio', 'socket:error', { error: error?.message || error });
         this.emitLocal('socket:error', {
           error: error?.message || error,

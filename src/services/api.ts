@@ -442,7 +442,11 @@ export const api = {
   },
 
   // Remote Session
-  async createRemoteSession(boardId: string): Promise<{
+  async createRemoteSession(
+    boardId: string,
+    preferredSessionId?: string,
+    preferredPasscode?: string
+  ): Promise<{
     sessionId: string;
     passcode: string;
     boardId: string;
@@ -453,7 +457,11 @@ export const api = {
       const res = await fetch('/api/remote/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boardId }),
+        body: JSON.stringify({
+          boardId,
+          sessionId: preferredSessionId,
+          passcode: preferredPasscode,
+        }),
       });
       if (res.ok) {
         const json = await safeJson(res);
@@ -465,11 +473,14 @@ export const api = {
 
     // Client-side fallback pairing code
     const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    let code = (preferredPasscode || '').trim().toUpperCase();
+    if (!code || code.length < 4) {
+      code = '';
+      for (let i = 0; i < 6; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
     }
-    const sessId = `sess-${Date.now()}-${code.toLowerCase()}`;
+    const sessId = preferredSessionId || `sess-${Date.now()}-${code.toLowerCase()}`;
     const url = `/remote?session=${sessId}&code=${code}`;
 
     return {
