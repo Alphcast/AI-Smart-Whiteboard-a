@@ -19,16 +19,16 @@ import {
   CheckCircle2,
   RotateCcw,
   Plus,
-  Trash2,
-  HelpCircle,
   Sigma,
-  Send,
   Loader2,
   KeyRound,
+  Wifi,
+  WifiOff,
+  Crosshair,
+  ArrowUpLeft,
 } from 'lucide-react';
 import { socket } from '../../services/socket';
 import { api } from '../../services/api';
-import { LatexRenderer } from '../math/LatexRenderer';
 
 interface PhoneRemoteControllerProps {
   sessionId?: string;
@@ -48,13 +48,21 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  // Controller Mode: 'draw' (direct handwriting/math) vs 'touchpad' (trackpad cursor)
-  const [controlMode, setControlMode] = useState<'draw' | 'touchpad'>('draw');
+  // Controller Mode: 'touchpad' (trackpad writing & cursor) vs 'draw' (full handwriting screen)
+  const [controlMode, setControlMode] = useState<'touchpad' | 'draw'>('touchpad');
+
+  // Touchpad Action: 'draw' (drag on touchpad to draw on whiteboard!) vs 'cursor' (pointer) vs 'laser' (laser beam)
+  const [touchpadAction, setTouchpadAction] = useState<'draw' | 'cursor' | 'laser'>('draw');
 
   // Drawing settings
-  const [activeTool, setActiveTool] = useState<'pen' | 'eraser' | 'laser'>('pen');
+  const [activeTool, setActiveTool] = useState<'pen' | 'eraser'>('pen');
   const [selectedColor, setSelectedColor] = useState<string>('#2563eb');
   const [strokeSize, setStrokeSize] = useState<number>(5);
+
+  // Real-time Transmission Activity
+  const [isTransmitting, setIsTransmitting] = useState(false);
+  const transmitTimeoutRef = useRef<any>(null);
+  const [txPacketsCount, setTxPacketsCount] = useState(0);
 
   // Quick Math Equation Tool on Phone
   const [mathModalOpen, setMathModalOpen] = useState(false);
@@ -68,11 +76,13 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   const currentPhoneStroke = useRef<{ x: number; y: number }[]>([]);
 
   // Trackpad refs
-  const trackpadRef = useRef<HTMLDivElement>(null);
+  const trackpadCanvasRef = useRef<HTMLCanvasElement>(null);
   const lastTouch = useRef<{ x: number; y: number } | null>(null);
-  const virtualCursor = useRef<{ x: number; y: number }>({ x: 600, y: 400 });
+  const isTouchpadDown = useRef(false);
+  const virtualCursor = useRef<{ x: number; y: number }>({ x: 700, y: 400 });
+  const touchTrail = useRef<{ x: number; y: number; age: number }[]>([]);
 
-  // Offset origin on whiteboard where phone writes
+  // Whiteboard origin for handwriting surface
   const writeOrigin = useRef<{ x: number; y: number }>({ x: 200, y: 150 });
 
   const triggerHaptic = useCallback((ms = 15) => {
@@ -83,6 +93,15 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     } catch {
       // ignore
     }
+  }, []);
+
+  const pulseTransmitting = useCallback(() => {
+    setIsTransmitting(true);
+    setTxPacketsCount((c) => c + 1);
+    if (transmitTimeoutRef.current) clearTimeout(transmitTimeoutRef.current);
+    transmitTimeoutRef.current = setTimeout(() => {
+      setIsTransmitting(false);
+    }, 250);
   }, []);
 
   // Connect to session
@@ -97,11 +116,12 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         setActiveSessionId(sessId);
         setActivePasscode(pass || sessionInfo.passcode);
 
-        // Bind via WebSocket
+        // Bind via Socket.IO
         socket.bindRemote(sessId, 'controller', pass || sessionInfo.passcode, navigator.userAgent);
         setIsConnected(true);
         triggerHaptic(30);
       } catch (err: any) {
+        console.warn('Connection attempt failed:', err);
         setConnectionError('Could not connect to session. Check code or refresh laptop.');
         setIsConnected(false);
       } finally {
@@ -125,8 +145,23 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
       setConnectionError(null);
     });
 
+    const unsubStatus = socket.on('remote:status', () => {
+      setIsConnected(true);
+    });
+
     const unsubDisconnect = socket.on('remote:disconnect', () => {
       setIsConnected(false);
+    });
+
+    const unsubConnClose = socket.on('connection:close', () => {
+      setIsConnected(false);
+    });
+
+    const unsubConnOpen = socket.on('connection:open', () => {
+      if (activeSessionId) {
+        socket.bindRemote(activeSessionId, 'controller', activePasscode);
+        setIsConnected(true);
+      }
     });
 
     const unsubError = socket.on('remote:error', (data) => {
@@ -136,20 +171,21 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
 
     return () => {
       unsubConnected();
+      unsubStatus();
       unsubDisconnect();
+      unsubConnClose();
+      unsubConnOpen();
       unsubError();
     };
-  }, []);
+  }, [activeSessionId, activePasscode]);
 
-  // Send event via WebSocket and HTTP fallback
+  // Send event via Socket.IO
   const sendEvent = useCallback(
     (type: string, payload: any = {}) => {
-      socket.send({ type, ...payload });
-      if (activeSessionId) {
-        api.sendRemoteEvent(activeSessionId, type, payload).catch(() => {});
-      }
+      pulseTransmitting();
+      socket.emit(type, payload);
     },
-    [activeSessionId]
+    [pulseTransmitting]
   );
 
   // Manual code entry submission
@@ -192,7 +228,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     }
   }, [controlMode]);
 
-  // Touch drawing handlers on phone canvas
+  // Touch drawing handlers on phone canvas (Mode: Draw)
   const handleDrawStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const canvas = phoneCanvasRef.current;
@@ -287,51 +323,160 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     triggerHaptic(20);
   };
 
-  // Trackpad handlers (Mode: Touchpad)
+  // Trackpad Animation & Rendering
+  useEffect(() => {
+    if (controlMode !== 'touchpad') return;
+
+    let animId: number;
+    const renderTrackpadTrail = () => {
+      const canvas = trackpadCanvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // Draw fading touch trails
+          for (let i = 0; i < touchTrail.current.length; i++) {
+            const p = touchTrail.current[i];
+            p.age += 1;
+            const alpha = Math.max(0, 1 - p.age / 24);
+            ctx.fillStyle =
+              touchpadAction === 'laser'
+                ? `rgba(239, 68, 68, ${alpha * 0.7})`
+                : touchpadAction === 'draw'
+                ? `rgba(59, 130, 246, ${alpha * 0.7})`
+                : `rgba(148, 163, 184, ${alpha * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, (strokeSize + 4) * (1 - p.age / 32), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          touchTrail.current = touchTrail.current.filter((p) => p.age < 24);
+        }
+      }
+      animId = requestAnimationFrame(renderTrackpadTrail);
+    };
+
+    animId = requestAnimationFrame(renderTrackpadTrail);
+    return () => cancelAnimationFrame(animId);
+  }, [controlMode, touchpadAction, strokeSize]);
+
+  // Touchpad touch handlers (Mode: Touchpad)
   const handleTouchpadStart = (e: React.TouchEvent<HTMLDivElement>) => {
     e.preventDefault();
     const touch = e.touches[0];
     lastTouch.current = { x: touch.clientX, y: touch.clientY };
+    isTouchpadDown.current = true;
 
-    sendEvent('remote:pointer', {
-      x: virtualCursor.current.x,
-      y: virtualCursor.current.y,
-      isDown: true,
-      mode: activeTool === 'laser' ? 'laser' : 'move',
-    });
+    const trackpadRect = e.currentTarget.getBoundingClientRect();
+    const localX = touch.clientX - trackpadRect.left;
+    const localY = touch.clientY - trackpadRect.top;
+    touchTrail.current.push({ x: localX, y: localY, age: 0 });
+
+    triggerHaptic(10);
+
+    if (touchpadAction === 'draw') {
+      // START DRAWING ON WHITEBOARD VIA TOUCHPAD!
+      sendEvent('remote:stroke_start', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        color: activeTool === 'eraser' ? '#ffffff' : selectedColor,
+        size: strokeSize * 1.5,
+        tool: activeTool,
+      });
+
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: true,
+        mode: 'draw',
+      });
+    } else {
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: true,
+        mode: touchpadAction === 'laser' ? 'laser' : 'move',
+      });
+    }
   };
 
   const handleTouchpadMove = (e: React.TouchEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (!lastTouch.current) return;
+    if (!lastTouch.current || !isTouchpadDown.current) return;
 
     const touch = e.touches[0];
-    const dx = (touch.clientX - lastTouch.current.x) * 2.4;
-    const dy = (touch.clientY - lastTouch.current.y) * 2.4;
+    const dx = (touch.clientX - lastTouch.current.x) * 2.3;
+    const dy = (touch.clientY - lastTouch.current.y) * 2.3;
 
     lastTouch.current = { x: touch.clientX, y: touch.clientY };
 
-    virtualCursor.current.x = Math.max(50, Math.min(1800, virtualCursor.current.x + dx));
-    virtualCursor.current.y = Math.max(50, Math.min(1000, virtualCursor.current.y + dy));
+    // Update virtual cursor position on whiteboard
+    virtualCursor.current.x = Math.max(30, Math.min(2200, virtualCursor.current.x + dx));
+    virtualCursor.current.y = Math.max(30, Math.min(1400, virtualCursor.current.y + dy));
 
-    sendEvent('remote:pointer', {
-      x: virtualCursor.current.x,
-      y: virtualCursor.current.y,
-      isDown: true,
-      mode: activeTool === 'laser' ? 'laser' : 'move',
-    });
+    const trackpadRect = e.currentTarget.getBoundingClientRect();
+    const localX = touch.clientX - trackpadRect.left;
+    const localY = touch.clientY - trackpadRect.top;
+    touchTrail.current.push({ x: localX, y: localY, age: 0 });
+
+    if (touchpadAction === 'draw') {
+      // EMIT STROKE POINT IN REAL-TIME TO WHITEBOARD!
+      sendEvent('remote:stroke_point', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+      });
+
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: true,
+        mode: 'draw',
+      });
+    } else {
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: true,
+        mode: touchpadAction === 'laser' ? 'laser' : 'move',
+      });
+    }
   };
 
   const handleTouchpadEnd = (e: React.TouchEvent<HTMLDivElement>) => {
     e.preventDefault();
+    isTouchpadDown.current = false;
     lastTouch.current = null;
 
+    if (touchpadAction === 'draw') {
+      // FINISH STROKE ON WHITEBOARD!
+      sendEvent('remote:stroke_end', {});
+
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: false,
+        mode: 'draw',
+      });
+    } else {
+      sendEvent('remote:pointer', {
+        x: virtualCursor.current.x,
+        y: virtualCursor.current.y,
+        isDown: false,
+        mode: touchpadAction === 'laser' ? 'laser' : 'move',
+      });
+    }
+  };
+
+  // Reset virtual cursor to center
+  const handleResetCursor = () => {
+    virtualCursor.current = { x: 700, y: 400 };
     sendEvent('remote:pointer', {
-      x: virtualCursor.current.x,
-      y: virtualCursor.current.y,
+      x: 700,
+      y: 400,
       isDown: false,
-      mode: activeTool === 'laser' ? 'laser' : 'move',
+      mode: 'move',
     });
+    triggerHaptic(20);
   };
 
   // Action shortcuts
@@ -364,7 +509,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   // If NOT connected, show clean Passcode Entry screen
   if (!isConnected && !initialSessionId) {
     return (
-      <div className="fixed inset-0 bg-slate-950 text-white flex flex-col justify-center items-center p-6 select-none">
+      <div className="fixed inset-0 bg-slate-950 text-white flex flex-col justify-center items-center p-6 select-none font-sans">
         <div className="max-w-sm w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-center space-y-5">
           <div className="w-14 h-14 bg-blue-600/20 text-blue-400 rounded-2xl flex items-center justify-center mx-auto border border-blue-500/30">
             <Radio className="w-7 h-7 animate-pulse" />
@@ -373,7 +518,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
           <div>
             <h1 className="text-xl font-bold text-white">Connect Phone Remote</h1>
             <p className="text-xs text-slate-400 mt-1">
-              Control your laptop whiteboard wirelessly. Write equations, draw, and present.
+              Control your laptop whiteboard wirelessly. Real-time touchpad writing, equations, and slides.
             </p>
           </div>
 
@@ -401,7 +546,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
             <button
               type="submit"
               disabled={isConnecting || inputCode.length < 4}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-semibold rounded-xl text-sm transition-all shadow-md shadow-blue-900/40 flex items-center justify-center gap-2"
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-semibold rounded-xl text-sm transition-all shadow-md shadow-blue-900/40 flex items-center justify-center gap-2 cursor-pointer"
             >
               {isConnecting ? (
                 <>
@@ -411,7 +556,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               ) : (
                 <>
                   <KeyRound className="w-4 h-4" />
-                  <span>Connect to Laptop</span>
+                  <span>Connect to Whiteboard</span>
                 </>
               )}
             </button>
@@ -427,50 +572,53 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
 
   return (
     <div className="fixed inset-0 bg-slate-950 text-white flex flex-col justify-between select-none touch-none overflow-hidden font-sans">
-      {/* Top Mobile Bar */}
-      <header className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <span
-            className={`w-2.5 h-2.5 rounded-full ${
-              isConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-amber-400 animate-pulse'
-            }`}
-          />
+      {/* Top Mobile Header & Connection Status Banner */}
+      <header className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0 z-20">
+        {/* Real-time Connection Status Indicator */}
+        <div className="flex items-center gap-2.5">
+          <div className="relative flex h-3 w-3 items-center justify-center">
+            {isConnected ? (
+              <>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </>
+            ) : (
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400 animate-pulse"></span>
+            )}
+          </div>
+
           <div>
             <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <span>Whiteboard Remote</span>
+              <span>{isConnected ? 'Paired & Ready' : 'Connecting...'}</span>
               {activePasscode && (
-                <span className="font-mono text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-blue-400">
+                <span className="font-mono text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-blue-400 border border-slate-700">
                   {activePasscode}
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-slate-400">
-              {isConnected ? 'Connected & Synced ✓' : 'Connecting...'}
-            </span>
+            <div className="flex items-center gap-1 text-[10px] text-slate-400">
+              {isTransmitting ? (
+                <span className="text-emerald-400 font-semibold flex items-center gap-1 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  Transmitting Touch live
+                </span>
+              ) : isConnected ? (
+                <span>WebSocket Link Active</span>
+              ) : (
+                <span>Reconnecting...</span>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Mode Switcher: Draw Mode vs Touchpad Mode */}
+        {/* Primary View Switcher: Touchpad vs Full Draw Canvas */}
         <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-xl">
-          <button
-            onClick={() => {
-              setControlMode('draw');
-              triggerHaptic();
-            }}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-              controlMode === 'draw'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Draw & Write
-          </button>
           <button
             onClick={() => {
               setControlMode('touchpad');
               triggerHaptic();
             }}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               controlMode === 'touchpad'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
@@ -478,24 +626,228 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
           >
             Touchpad
           </button>
+          <button
+            onClick={() => {
+              setControlMode('draw');
+              triggerHaptic();
+            }}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              controlMode === 'draw'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Full Canvas
+          </button>
         </div>
       </header>
 
-      {/* Main Touch Area */}
+      {/* Main Touch Interaction Surface */}
       <main className="flex-1 relative bg-slate-950 flex flex-col overflow-hidden">
-        {/* MODE A: Direct Handwriting & Equation Surface */}
-        {controlMode === 'draw' ? (
+        {/* MODE A: Wireless Touchpad with Live Writing Support */}
+        {controlMode === 'touchpad' ? (
+          <div className="flex-1 relative flex flex-col bg-slate-900/60 overflow-hidden">
+            {/* Touchpad Sub-toolbar */}
+            <div className="px-3 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              {/* Touchpad Action Mode Toggle */}
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  onClick={() => {
+                    setTouchpadAction('draw');
+                    triggerHaptic();
+                  }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    touchpadAction === 'draw'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Drag on touchpad to draw on whiteboard"
+                >
+                  <Pen className="w-3.5 h-3.5" />
+                  <span>Write / Draw</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setTouchpadAction('cursor');
+                    triggerHaptic();
+                  }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    touchpadAction === 'cursor'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Move mouse cursor"
+                >
+                  <MousePointer className="w-3.5 h-3.5" />
+                  <span>Pointer</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setTouchpadAction('laser');
+                    triggerHaptic();
+                  }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    touchpadAction === 'laser'
+                      ? 'bg-red-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Laser pointer for presentation"
+                >
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>Laser</span>
+                </button>
+              </div>
+
+              {/* Ink & Color Controls when in Draw mode */}
+              {touchpadAction === 'draw' && (
+                <div className="flex items-center gap-1.5">
+                  {/* Tool toggle */}
+                  <div className="flex items-center bg-slate-800 rounded-lg p-0.5">
+                    <button
+                      onClick={() => {
+                        setActiveTool('pen');
+                        triggerHaptic();
+                      }}
+                      className={`p-1.5 rounded-md ${
+                        activeTool === 'pen' ? 'bg-blue-600 text-white' : 'text-slate-400'
+                      }`}
+                    >
+                      <Pen className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveTool('eraser');
+                        triggerHaptic();
+                      }}
+                      className={`p-1.5 rounded-md ${
+                        activeTool === 'eraser' ? 'bg-blue-600 text-white' : 'text-slate-400'
+                      }`}
+                    >
+                      <Eraser className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Colors */}
+                  <div className="flex items-center gap-1">
+                    {['#2563eb', '#dc2626', '#16a34a', '#ffffff'].map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => {
+                          setSelectedColor(c);
+                          setActiveTool('pen');
+                          triggerHaptic();
+                        }}
+                        style={{ backgroundColor: c }}
+                        className={`w-5 h-5 rounded-full border border-slate-600 transition-transform ${
+                          selectedColor === c && activeTool === 'pen'
+                            ? 'scale-110 ring-2 ring-blue-400'
+                            : ''
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Reset Cursor & Solve Math buttons */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleResetCursor}
+                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg"
+                  title="Recenter Cursor on Whiteboard"
+                >
+                  <Crosshair className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setMathModalOpen(true)}
+                  className="flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg font-bold text-[11px] shadow-sm cursor-pointer"
+                >
+                  <Sigma className="w-3 h-3" />
+                  <span>Math</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Interactive Touchpad Surface */}
+            <div
+              onTouchStart={handleTouchpadStart}
+              onTouchMove={handleTouchpadMove}
+              onTouchEnd={handleTouchpadEnd}
+              className="flex-1 relative bg-gradient-to-b from-slate-900 to-slate-950 flex flex-col items-center justify-center p-6 cursor-crosshair overflow-hidden touch-none"
+            >
+              {/* Canvas for immediate visual trail */}
+              <canvas
+                ref={trackpadCanvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                width={600}
+                height={800}
+              />
+
+              {/* Touchpad Guide & Status Watermark */}
+              <div className="flex flex-col items-center text-center pointer-events-none select-none z-10 space-y-2 opacity-80">
+                <div
+                  className={`w-16 h-16 rounded-full border flex items-center justify-center transition-colors ${
+                    isTransmitting
+                      ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400'
+                      : touchpadAction === 'draw'
+                      ? 'border-blue-500/40 bg-blue-500/5 text-blue-400'
+                      : touchpadAction === 'laser'
+                      ? 'border-red-500/40 bg-red-500/5 text-red-400'
+                      : 'border-slate-700 bg-slate-800/20 text-slate-400'
+                  }`}
+                >
+                  {touchpadAction === 'draw' ? (
+                    <Pen className="w-7 h-7" />
+                  ) : touchpadAction === 'laser' ? (
+                    <Radio className="w-7 h-7 animate-pulse text-red-400" />
+                  ) : (
+                    <MousePointer className="w-7 h-7" />
+                  )}
+                </div>
+
+                <p className="text-sm font-bold text-slate-200">
+                  {touchpadAction === 'draw'
+                    ? 'Touchpad Writing Active'
+                    : touchpadAction === 'laser'
+                    ? 'Laser Pointer Active'
+                    : 'Mouse Trackpad Active'}
+                </p>
+
+                <p className="text-xs text-slate-400 max-w-[260px]">
+                  {touchpadAction === 'draw'
+                    ? 'Drag finger here to write or draw directly on the whiteboard'
+                    : touchpadAction === 'laser'
+                    ? 'Move finger to guide the presentation laser pointer'
+                    : 'Slide finger to move mouse cursor across the canvas'}
+                </p>
+
+                {isTransmitting && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-mono font-semibold animate-pulse">
+                    📡 Transmitting live ({txPacketsCount} pts)
+                  </span>
+                )}
+              </div>
+
+              {/* Bottom Instructions Badge */}
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] text-slate-500 pointer-events-none text-center bg-slate-950/80 px-3 py-1 rounded-full border border-slate-800 whitespace-nowrap">
+                Live paired with whiteboard • Instant transmission
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* MODE B: Full Screen Handwriting Canvas */
           <div className="flex-1 relative flex flex-col bg-slate-900 border-y border-slate-800 overflow-hidden">
-            {/* Tool Bar inside Draw mode */}
+            {/* Draw mode toolbar */}
             <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs shrink-0">
-              {/* Tool choice */}
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => {
                     setActiveTool('pen');
                     triggerHaptic();
                   }}
-                  className={`p-2 rounded-lg transition-colors ${
+                  className={`p-2 rounded-lg transition-colors cursor-pointer ${
                     activeTool === 'pen' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
                   }`}
                   title="Pen"
@@ -507,7 +859,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                     setActiveTool('eraser');
                     triggerHaptic();
                   }}
-                  className={`p-2 rounded-lg transition-colors ${
+                  className={`p-2 rounded-lg transition-colors cursor-pointer ${
                     activeTool === 'eraser' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
                   }`}
                   title="Eraser"
@@ -527,8 +879,10 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                       triggerHaptic();
                     }}
                     style={{ backgroundColor: c }}
-                    className={`w-6 h-6 rounded-full border border-slate-600 transition-transform ${
-                      selectedColor === c && activeTool === 'pen' ? 'scale-110 ring-2 ring-blue-400' : ''
+                    className={`w-6 h-6 rounded-full border border-slate-600 transition-transform cursor-pointer ${
+                      selectedColor === c && activeTool === 'pen'
+                        ? 'scale-110 ring-2 ring-blue-400'
+                        : ''
                     }`}
                   />
                 ))}
@@ -538,14 +892,14 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={handleClearPhoneCanvas}
-                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg"
+                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg cursor-pointer"
                   title="Clear Writing Surface"
                 >
                   <RotateCcw className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setMathModalOpen(true)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg font-bold text-xs shadow-sm"
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg font-bold text-xs shadow-sm cursor-pointer"
                 >
                   <Sigma className="w-3.5 h-3.5" />
                   <span>Solve Math</span>
@@ -567,60 +921,24 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               </div>
             </div>
           </div>
-        ) : (
-          /* MODE B: Trackpad Touchpad */
-          <div
-            ref={trackpadRef}
-            onTouchStart={handleTouchpadStart}
-            onTouchMove={handleTouchpadMove}
-            onTouchEnd={handleTouchpadEnd}
-            className="flex-1 relative bg-gradient-to-b from-slate-900 to-slate-950 border-y border-slate-800 flex flex-col items-center justify-center p-6 cursor-crosshair overflow-hidden"
-          >
-            <div className="w-16 h-16 rounded-full border border-slate-700/60 flex items-center justify-center text-slate-600 pointer-events-none">
-              <Radio className="w-6 h-6 animate-pulse" />
-            </div>
-            <p className="mt-4 text-xs font-semibold text-slate-300 pointer-events-none">
-              Wireless Touchpad Active
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1 pointer-events-none">
-              Drag finger to move mouse • Tap to click
-            </p>
-
-            <div className="absolute top-4 right-4 flex items-center gap-2">
-              <button
-                onClick={() => {
-                  setActiveTool(activeTool === 'laser' ? 'pen' : 'laser');
-                  triggerHaptic();
-                }}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  activeTool === 'laser'
-                    ? 'bg-red-600 text-white shadow-md shadow-red-900/40 ring-2 ring-red-400'
-                    : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                <Radio className="w-3.5 h-3.5" />
-                <span>Laser Pointer</span>
-              </button>
-            </div>
-          </div>
         )}
       </main>
 
       {/* Bottom Remote Control Action Deck */}
-      <footer className="p-3 bg-slate-900 border-t border-slate-800 space-y-2 shrink-0">
+      <footer className="p-3 bg-slate-900 border-t border-slate-800 space-y-2 shrink-0 z-20">
         <div className="flex items-center justify-between gap-1.5 text-xs">
           {/* Undo / Redo */}
           <div className="flex items-center gap-1">
             <button
               onClick={() => handleAction('undo')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Undo"
             >
               <Undo2 className="w-4 h-4" />
             </button>
             <button
               onClick={() => handleAction('redo')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Redo"
             >
               <Redo2 className="w-4 h-4" />
@@ -631,21 +949,21 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
           <div className="flex items-center gap-1">
             <button
               onClick={() => handleAction('zoom_out')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Zoom Out"
             >
               <ZoomOut className="w-4 h-4" />
             </button>
             <button
               onClick={() => handleAction('zoom_reset')}
-              className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[11px] font-mono"
+              className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[11px] font-mono cursor-pointer"
               title="Reset 100%"
             >
               100%
             </button>
             <button
               onClick={() => handleAction('zoom_in')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Zoom In"
             >
               <ZoomIn className="w-4 h-4" />
@@ -656,21 +974,21 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
           <div className="flex items-center gap-1">
             <button
               onClick={() => handleAction('prev_page')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Previous Page"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               onClick={() => handleAction('next_page')}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl"
+              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer"
               title="Next Page"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
             <button
               onClick={() => handleAction('add_page')}
-              className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl"
+              className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl cursor-pointer"
               title="Add New Page"
             >
               <Plus className="w-4 h-4" />
@@ -690,7 +1008,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               </div>
               <button
                 onClick={() => setMathModalOpen(false)}
-                className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded"
+                className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded cursor-pointer"
               >
                 Close
               </button>
@@ -714,7 +1032,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                   key={sym}
                   type="button"
                   onClick={() => setEquationText((prev) => prev + sym)}
-                  className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors font-bold"
+                  className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors font-bold cursor-pointer"
                 >
                   {sym}
                 </button>
@@ -736,7 +1054,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
             <button
               onClick={handleSolveMath}
               disabled={isSolving || !equationText.trim()}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-40"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer"
             >
               {isSolving ? (
                 <>

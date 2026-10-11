@@ -524,4 +524,22 @@ export const api = {
       connectedDisplays: 1,
     };
   },
+
+  async getActiveSessionForBoard(boardId: string): Promise<{
+    sessionId: string;
+    passcode: string;
+    boardId: string;
+    connectedControllers: number;
+  } | null> {
+    try {
+      const res = await fetch(`/api/remote/boards/${boardId}/active`);
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // Handled
+    }
+    return null;
+  },
 };

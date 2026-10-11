@@ -6,6 +6,7 @@
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { Server as SocketIOServer } from 'socket.io';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -21,18 +22,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+  path: '/socket.io/',
+});
 
 app.use(express.json({ limit: '15mb' }));
 
-// Initialize Google GenAI
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+// Lazy helper to initialize Google GenAI when GEMINI_API_KEY is available
+function getAi(): GoogleGenAI | null {
+  if (!process.env.GEMINI_API_KEY) return null;
+  return new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-  },
-});
+  });
+}
 
 // Storage Directory
 const DATA_DIR = process.env.VERCEL ? path.join('/tmp', '.data') : path.join(__dirname, '.data');
@@ -602,7 +613,8 @@ app.post('/api/equations/solve', async (req, res) => {
   }
 
   // If Gemini API key is present, use Gemini 3.8 Flash for rich step-by-step reasoning and pedagogy
-  if (process.env.GEMINI_API_KEY) {
+  const ai = getAi();
+  if (ai) {
     try {
       const prompt = `You are an expert mathematics engine for an interactive digital whiteboard.
 Solve the following equation step-by-step with clean mathematical rigor:
@@ -677,7 +689,8 @@ Return only the raw JSON.`;
 app.post('/api/equations/recognize', async (req, res) => {
   const { imageBase64, strokeData } = req.body;
 
-  if (process.env.GEMINI_API_KEY && imageBase64) {
+  const ai = getAi();
+  if (ai && imageBase64) {
     try {
       const mimeMatch = imageBase64.match(/^data:(image\/[a-zA-Z]+);base64,/);
       const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
@@ -735,7 +748,8 @@ Return strictly a JSON object:
 app.post('/api/equations/explain', async (req, res) => {
   const { expression, solution, level = 'student', question } = req.body;
 
-  if (process.env.GEMINI_API_KEY) {
+  const ai = getAi();
+  if (ai) {
     try {
       const prompt = `You are a friendly, world-class mathematics teacher for an interactive digital whiteboard.
 Explain this mathematical problem to a ${level} level learner:
@@ -870,15 +884,40 @@ app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
   session.lastActive = Date.now();
   saveSessionsToDisk();
 
-  // Forward immediately to displays via WebSocket
+  // Forward immediately to displays via WebSocket and Socket.IO
   const fullMsg = JSON.stringify({ type: eventItem.type, ...eventItem.payload });
   session.displaySockets.forEach((dispWs) => {
     if (dispWs.readyState === WebSocket.OPEN) {
       dispWs.send(fullMsg);
     }
   });
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit(eventItem.type, eventItem.payload);
 
   res.json({ success: true, eventId: eventItem.id });
+});
+
+// 14. Get Active Remote Session for a Board
+app.get('/api/remote/boards/:boardId/active', (req, res) => {
+  loadSessionsFromDisk();
+  const boardId = req.params.boardId;
+  const sessions = Array.from(remoteSessions.values())
+    .filter((s) => s.boardId === boardId)
+    .sort((a, b) => b.lastActive - a.lastActive);
+
+  if (sessions.length > 0) {
+    const s = sessions[0];
+    return res.json({
+      success: true,
+      data: {
+        sessionId: s.sessionId,
+        passcode: s.passcode,
+        boardId: s.boardId,
+        connectedControllers: s.controllerSockets.size,
+      },
+    });
+  }
+
+  res.json({ success: true, data: null });
 });
 
 // 14. Poll Remote Controller Events (for display when socket is reconnecting)
@@ -1118,6 +1157,213 @@ function broadcastToBoard(boardId: string, senderWs: WebSocket | null, payload: 
   });
 }
 
+// ================= SOCKET.IO REAL-TIME HANDLING =================
+io.on('connection', (socket) => {
+  let boundBoardId: string | null = null;
+  let boundSessionId: string | null = null;
+  let userMeta: { userId: string; userName: string; color: string } | null = null;
+  let clientRole: 'controller' | 'display' | 'collaborator' | null = null;
+
+  // 1. Join Whiteboard Collaboration Room
+  socket.on('board:join', (data: any) => {
+    if (!data?.boardId) return;
+    boundBoardId = data.boardId;
+    userMeta = {
+      userId: data.userId || `user-${Math.random().toString(36).substring(2, 6)}`,
+      userName: data.userName || 'Collaborator',
+      color: data.color || '#3b82f6',
+    };
+    clientRole = 'collaborator';
+    socket.join(`board:${boundBoardId}`);
+
+    // Confirm joined to caller
+    socket.emit('board:joined', { boardId: boundBoardId, user: userMeta });
+
+    // Notify other peers in board room
+    socket.to(`board:${boundBoardId}`).emit('collaborator:joined', { user: userMeta });
+  });
+
+  // Real-time cursor & objects
+  socket.on('board:cursor', (data: any) => {
+    if (boundBoardId) {
+      socket.to(`board:${boundBoardId}`).emit('board:cursor', {
+        userId: userMeta?.userId,
+        userName: userMeta?.userName,
+        color: userMeta?.color,
+        ...data,
+      });
+    }
+  });
+
+  socket.on('board:object_create', (data: any) => {
+    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_create', data);
+  });
+
+  socket.on('board:object_update', (data: any) => {
+    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_update', data);
+  });
+
+  socket.on('board:object_delete', (data: any) => {
+    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_delete', data);
+  });
+
+  socket.on('board:page_change', (data: any) => {
+    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:page_change', data);
+  });
+
+  // 2. Bind Smartphone Remote Session
+  socket.on('remote:bind', (data: any) => {
+    const { sessionId, role, passcode, deviceInfo } = data || {};
+    loadSessionsFromDisk();
+    const session = remoteSessions.get(sessionId);
+    if (!session) {
+      socket.emit('remote:error', { message: 'Session does not exist or expired' });
+      return;
+    }
+
+    boundSessionId = sessionId;
+    boundBoardId = session.boardId;
+    clientRole = role;
+
+    // Join both remote room and whiteboard board room
+    socket.join(`remote:${sessionId}`);
+    socket.join(`board:${session.boardId}`);
+
+    if (role === 'controller') {
+      if (passcode && passcode.toUpperCase() !== session.passcode.toUpperCase()) {
+        socket.emit('remote:error', { message: 'Invalid pairing code' });
+        return;
+      }
+
+      session.lastActive = Date.now();
+      saveSessionsToDisk();
+
+      // Confirm to controller
+      socket.emit('remote:connected', {
+        sessionId,
+        boardId: session.boardId,
+        role: 'controller',
+      });
+
+      // Broadcast to display in remote room & board room
+      io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:phone_paired', {
+        sessionId,
+        boardId: session.boardId,
+        deviceInfo: deviceInfo || 'Mobile Device',
+      });
+
+      io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+        isPaired: true,
+        connectedControllers: 1,
+        connectedDisplays: 1,
+        sessionId,
+        boardId: session.boardId,
+      });
+    } else if (role === 'display') {
+      socket.emit('remote:connected', {
+        sessionId,
+        boardId: session.boardId,
+        role: 'display',
+      });
+
+      socket.emit('remote:status', {
+        isPaired: session.controllerSockets.size > 0 || session.eventBuffer.length > 0,
+        connectedControllers: session.controllerSockets.size,
+        sessionId,
+        boardId: session.boardId,
+      });
+    }
+  });
+
+  // 3. Relay Remote Touchpad & Drawing Events instantly
+  socket.on('remote:stroke_start', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:stroke_start', data);
+    }
+  });
+
+  socket.on('remote:stroke_point', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:stroke_point', data);
+    }
+  });
+
+  socket.on('remote:stroke_end', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:stroke_end', data);
+    }
+  });
+
+  socket.on('remote:pointer', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:pointer', data);
+    }
+  });
+
+  socket.on('remote:action', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:action', data);
+    }
+  });
+
+  socket.on('remote:equation_solve', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:equation_solve', data);
+    }
+  });
+
+  socket.on('remote:tool_change', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:tool_change', data);
+    }
+  });
+
+  // Generic forwarder for any other remote event
+  socket.on('remote:event', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session && data?.type) {
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit(data.type, data);
+    }
+  });
+
+  // Disconnect handler
+  socket.on('disconnect', () => {
+    if (boundSessionId && clientRole === 'controller') {
+      const session = remoteSessions.get(boundSessionId);
+      if (session) {
+        io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:phone_disconnected', {
+          sessionId: boundSessionId,
+        });
+        io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+          isPaired: false,
+          connectedControllers: 0,
+          sessionId: boundSessionId,
+          boardId: session.boardId,
+        });
+      }
+    }
+  });
+});
+
 // Setup Vite or Static File Serving
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
@@ -1140,7 +1386,7 @@ async function startServer() {
   // Dev server must run on port 3000 per environment constraints
   const portArgIndex = process.argv.indexOf('--port');
   const portArg = portArgIndex !== -1 ? parseInt(process.argv[portArgIndex + 1], 10) : null;
-  const PORT = portArg || 3000;
+  const PORT = portArg || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`AI Smart Whiteboard server running on http://0.0.0.0:${PORT}`);

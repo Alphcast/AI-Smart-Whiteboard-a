@@ -3,96 +3,213 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { io, Socket } from 'socket.io-client';
+
 type MessageHandler = (data: any) => void;
 
 class RealtimeSocketClient {
-  private ws: WebSocket | null = null;
+  private socket: Socket | null = null;
   private listeners: Map<string, Set<MessageHandler>> = new Map();
-  private reconnectTimeout: any = null;
-  private shouldReconnect = true;
+  private isConnectedState = false;
+  private connectionStatus: 'connected' | 'connecting' | 'disconnected' = 'disconnected';
+
   private currentContext: {
     type: 'board' | 'remote';
     payload: any;
   } | null = null;
 
-  // HTTP polling fallback for serverless environments (e.g. Vercel)
+  // HTTP polling fallback for maximum resilience
   private pollingInterval: any = null;
   private lastPolledTimestamp = 0;
-  private isFallbackMode = false;
   private activeRemoteSessionId: string | null = null;
 
-  connect() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      return;
+  connect(): Socket {
+    if (this.socket && this.socket.connected) {
+      return this.socket;
     }
 
-    if (typeof window === 'undefined') return;
+    if (this.socket) {
+      return this.socket;
+    }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}`;
+    this.connectionStatus = 'connecting';
+    this.emitLocal('connection:status', { status: 'connecting' });
 
-    try {
-      this.ws = new WebSocket(wsUrl);
+    // Determine target URL for socket.io
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
-      this.ws.onopen = () => {
-        this.isFallbackMode = false;
-        this.emitLocal('connection:open', {});
-        // Re-authenticate or re-join room if context exists
-        if (this.currentContext) {
-          if (this.currentContext.type === 'board') {
-            this.send({ type: 'board:join', ...this.currentContext.payload });
-          } else if (this.currentContext.type === 'remote') {
-            this.send({ type: 'remote:bind', ...this.currentContext.payload });
-          }
+    this.socket = io(origin, {
+      path: '/socket.io/',
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
+    });
+
+    this.socket.on('connect', () => {
+      this.isConnectedState = true;
+      this.connectionStatus = 'connected';
+      this.emitLocal('connection:open', {});
+      this.emitLocal('connection:status', { status: 'connected' });
+
+      // Re-send context if any (rejoining board or remote session)
+      if (this.currentContext) {
+        if (this.currentContext.type === 'board') {
+          this.socket?.emit('board:join', this.currentContext.payload);
+        } else if (this.currentContext.type === 'remote') {
+          this.socket?.emit('remote:bind', this.currentContext.payload);
         }
-      };
+      }
+    });
 
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type) {
-            this.emitLocal(data.type, data);
-          }
-          // Global message hook
-          this.emitLocal('*', data);
-        } catch (e) {
-          console.error('Socket message parse error:', e);
-        }
-      };
+    this.socket.on('disconnect', (reason) => {
+      this.isConnectedState = false;
+      this.connectionStatus = 'disconnected';
+      this.emitLocal('connection:close', { reason });
+      this.emitLocal('connection:status', { status: 'disconnected', reason });
 
-      this.ws.onclose = () => {
-        this.emitLocal('connection:close', {});
-        this.enableFallbackPolling();
+      // If remote session is active, enable polling fallback during socket reconnection
+      if (this.activeRemoteSessionId && !this.pollingInterval) {
+        this.startPolling();
+      }
+    });
 
-        if (this.shouldReconnect) {
-          clearTimeout(this.reconnectTimeout);
-          this.reconnectTimeout = setTimeout(() => this.connect(), 4000);
-        }
-      };
+    this.socket.on('connect_error', (error) => {
+      this.isConnectedState = false;
+      this.connectionStatus = 'disconnected';
+      this.emitLocal('connection:error', { error });
+      this.emitLocal('connection:status', { status: 'disconnected', error });
 
-      this.ws.onerror = () => {
-        // In serverless hosts like Vercel, native WebSockets to server.ts are not available
-        this.enableFallbackPolling();
-      };
-    } catch {
-      this.enableFallbackPolling();
+      if (this.activeRemoteSessionId && !this.pollingInterval) {
+        this.startPolling();
+      }
+    });
+
+    // Forward any wildcard/known events to registered local listeners
+    const knownEvents = [
+      'board:joined',
+      'collaborator:joined',
+      'collaborator:left',
+      'board:cursor',
+      'board:object_create',
+      'board:object_update',
+      'board:object_delete',
+      'board:page_change',
+      'remote:connected',
+      'remote:phone_paired',
+      'remote:phone_disconnected',
+      'remote:status',
+      'remote:error',
+      'remote:stroke_start',
+      'remote:stroke_point',
+      'remote:stroke_end',
+      'remote:pointer',
+      'remote:action',
+      'remote:equation_solve',
+      'remote:tool_change',
+    ];
+
+    knownEvents.forEach((ev) => {
+      this.socket?.on(ev, (data) => {
+        this.emitLocal(ev, data);
+        this.emitLocal('*', { type: ev, ...data });
+      });
+    });
+
+    return this.socket;
+  }
+
+  joinBoard(boardId: string, user: { name: string; color: string }) {
+    this.currentContext = {
+      type: 'board',
+      payload: { boardId, userName: user.name, color: user.color },
+    };
+    const s = this.connect();
+    if (s.connected) {
+      s.emit('board:join', this.currentContext.payload);
     }
   }
 
-  private enableFallbackPolling() {
-    if (this.isFallbackMode) return;
-    this.isFallbackMode = true;
+  bindRemote(sessionId: string, role: 'controller' | 'display', passcode?: string, deviceInfo?: string) {
+    this.activeRemoteSessionId = sessionId;
+    this.currentContext = {
+      type: 'remote',
+      payload: { sessionId, role, passcode, deviceInfo },
+    };
 
-    // Start background HTTP event polling for the active remote session if one is bound
-    if (this.activeRemoteSessionId && !this.pollingInterval) {
-      this.startPolling();
+    const s = this.connect();
+    if (s.connected) {
+      s.emit('remote:bind', this.currentContext.payload);
     }
+
+    // Secondary HTTP fallback polling
+    this.startPolling();
+  }
+
+  emit(event: string, data: any) {
+    const s = this.connect();
+    s.emit(event, data);
+
+    // Also send via HTTP event buffer when in remote session to guarantee delivery
+    if (this.activeRemoteSessionId && event.startsWith('remote:')) {
+      fetch(`/api/remote/sessions/${this.activeRemoteSessionId}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: event, payload: data }),
+      }).catch(() => {});
+    }
+  }
+
+  send(data: any) {
+    const eventType = data?.type || 'message';
+    this.emit(eventType, data);
+  }
+
+  on(event: string, handler: MessageHandler) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(handler);
+
+    // If socket is already initialized and it's a custom event not in knownEvents, attach directly too
+    if (this.socket) {
+      this.socket.on(event, handler);
+    }
+
+    return () => this.off(event, handler);
+  }
+
+  off(event: string, handler: MessageHandler) {
+    const handlers = this.listeners.get(event);
+    if (handlers) {
+      handlers.delete(handler);
+    }
+    if (this.socket) {
+      this.socket.off(event, handler);
+    }
+  }
+
+  emitLocal(event: string, data: any) {
+    const handlers = this.listeners.get(event);
+    if (handlers) {
+      handlers.forEach((h) => h(data));
+    }
+  }
+
+  isConnected(): boolean {
+    return this.socket?.connected || this.isConnectedState;
+  }
+
+  getStatus(): 'connected' | 'connecting' | 'disconnected' {
+    return this.connectionStatus;
   }
 
   private startPolling() {
     if (this.pollingInterval) clearInterval(this.pollingInterval);
-    this.lastPolledTimestamp = Date.now() - 5000;
+    this.lastPolledTimestamp = Date.now() - 3000;
 
     this.pollingInterval = setInterval(async () => {
       if (!this.activeRemoteSessionId) return;
@@ -116,101 +233,24 @@ class RealtimeSocketClient {
           }
         }
       } catch {
-        // Serverless polling retry
+        // Silent fallback
       }
-    }, 250); // fast 250ms polling loop provides instant, fluid touchpad response
-  }
-
-  joinBoard(boardId: string, user: { name: string; color: string }) {
-    this.currentContext = {
-      type: 'board',
-      payload: { boardId, userName: user.name, color: user.color },
-    };
-    this.connect();
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.send({
-        type: 'board:join',
-        boardId,
-        userName: user.name,
-        color: user.color,
-      });
-    }
-  }
-
-  bindRemote(sessionId: string, role: 'controller' | 'display', passcode?: string, deviceInfo?: string) {
-    this.activeRemoteSessionId = sessionId;
-    this.currentContext = {
-      type: 'remote',
-      payload: { sessionId, role, passcode, deviceInfo },
-    };
-    this.connect();
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.send({
-        type: 'remote:bind',
-        sessionId,
-        role,
-        passcode,
-        deviceInfo,
-      });
-    }
-
-    // Always start fallback polling alongside socket so connection never drops on Vercel
-    this.startPolling();
-  }
-
-  send(data: any) {
-    // 1. Send via WebSocket if alive
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
-    }
-
-    // 2. Also send via HTTP event buffer when in remote session to guarantee delivery on serverless
-    if (this.activeRemoteSessionId && data.type) {
-      fetch(`/api/remote/sessions/${this.activeRemoteSessionId}/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: data.type, payload: data }),
-      }).catch(() => {});
-    }
-  }
-
-  on(event: string, handler: MessageHandler) {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
-    }
-    this.listeners.get(event)!.add(handler);
-    return () => this.off(event, handler);
-  }
-
-  off(event: string, handler: MessageHandler) {
-    const handlers = this.listeners.get(event);
-    if (handlers) {
-      handlers.delete(handler);
-    }
-  }
-
-  emitLocal(event: string, data: any) {
-    const handlers = this.listeners.get(event);
-    if (handlers) {
-      handlers.forEach((h) => h(data));
-    }
+    }, 300);
   }
 
   disconnect() {
-    this.shouldReconnect = false;
-    clearTimeout(this.reconnectTimeout);
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
     }
+    this.isConnectedState = false;
+    this.connectionStatus = 'disconnected';
     this.currentContext = null;
     this.activeRemoteSessionId = null;
-    this.isFallbackMode = false;
   }
 }
 

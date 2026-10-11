@@ -168,6 +168,18 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     mode: 'move' | 'draw' | 'laser';
   } | null>(null);
   const [isPhoneConnected, setIsPhoneConnected] = useState(false);
+  const [isRemoteTransmitting, setIsRemoteTransmitting] = useState(false);
+  const [pairedSessionId, setPairedSessionId] = useState<string | null>(null);
+  const transmitTimerRef = useRef<any>(null);
+
+  const markTransmissionActive = useCallback(() => {
+    setIsPhoneConnected(true);
+    setIsRemoteTransmitting(true);
+    if (transmitTimerRef.current) clearTimeout(transmitTimerRef.current);
+    transmitTimerRef.current = setTimeout(() => {
+      setIsRemoteTransmitting(false);
+    }, 350);
+  }, []);
 
   // Active remote drawing stroke
   const remoteStrokeId = useRef<string | null>(null);
@@ -226,9 +238,40 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       });
     });
 
+    // Check and auto-bind active remote session if one already exists for this board
+    api.getActiveSessionForBoard(boardId).then((active) => {
+      if (active) {
+        setPairedSessionId(active.sessionId);
+        socket.bindRemote(active.sessionId, 'display');
+        if (active.connectedControllers > 0) {
+          setIsPhoneConnected(true);
+        }
+      }
+    });
+
+    const unsubPaired = socket.on('remote:phone_paired', (data) => {
+      setIsPhoneConnected(true);
+      if (data?.sessionId) setPairedSessionId(data.sessionId);
+      showToast('📱 Smartphone Remote Paired! Touchpad writing active.');
+    });
+
+    const unsubDisconnected = socket.on('remote:phone_disconnected', () => {
+      setIsPhoneConnected(false);
+      showToast('📱 Smartphone Remote Disconnected');
+    });
+
+    const unsubStatus = socket.on('remote:status', (data) => {
+      if (data?.isPaired !== undefined) {
+        setIsPhoneConnected(data.isPaired);
+      }
+      if (data?.sessionId) {
+        setPairedSessionId(data.sessionId);
+      }
+    });
+
     // Remote phone pointer movements
     const unsubPointer = socket.on('remote:pointer', (data) => {
-      setIsPhoneConnected(true);
+      markTransmissionActive();
       setRemotePointer({
         x: data.x,
         y: data.y,
@@ -239,7 +282,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
     // Remote phone drawing onto laptop canvas!
     const unsubStrokeStart = socket.on('remote:stroke_start', (data) => {
-      setIsPhoneConnected(true);
+      markTransmissionActive();
       const newId = `remote-stroke-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       remoteStrokeId.current = newId;
       const targetPg = currentPageIdRef.current;
@@ -282,6 +325,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     });
 
     const unsubStrokePoint = socket.on('remote:stroke_point', (data) => {
+      markTransmissionActive();
       if (!remoteStrokeId.current) return;
       const sid = remoteStrokeId.current;
       const targetPg = currentPageIdRef.current;
@@ -379,6 +423,9 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
     return () => {
       unsubCursor();
+      unsubPaired();
+      unsubDisconnected();
+      unsubStatus();
       unsubPointer();
       unsubStrokeStart();
       unsubStrokePoint();
@@ -387,7 +434,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubAction();
       unsubToolChange();
     };
-  }, [boardId]);
+  }, [boardId, markTransmissionActive, showToast]);
 
   // 3. Auto-save handler
   const queueAutoSave = useCallback((updatedBoard: Whiteboard) => {
@@ -792,20 +839,41 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2">
-          {/* Connect Phone Controller */}
+          {/* Real-time Smartphone Touchpad Connection Status Indicator */}
           <button
             onClick={() => setIsPhoneModalOpen(true)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all shadow-sm ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer border ${
               isPhoneConnected
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-300 ring-2 ring-emerald-400/20'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 ring-2 ring-emerald-400/20 hover:bg-emerald-100'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
             }`}
-            title="Connect your smartphone as wireless touchpad"
+            title={
+              isPhoneConnected
+                ? 'Phone Remote is Paired & Connected. Click to view pairing details.'
+                : 'Connect smartphone remote touchpad'
+            }
           >
-            <Smartphone className="w-4 h-4 text-blue-600" />
-            <span className="hidden sm:inline">
-              {isPhoneConnected ? 'Phone Connected' : 'Connect Phone'}
-            </span>
+            {isPhoneConnected ? (
+              <>
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+                <Smartphone className="w-4 h-4 text-emerald-600" />
+                <span className="hidden sm:inline">Phone Paired</span>
+                {isRemoteTransmitting && (
+                  <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded text-[9px] font-mono font-bold animate-pulse">
+                    TOUCH
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-4 h-4 text-slate-500" />
+                <span className="hidden sm:inline">Connect Phone</span>
+                <span className="w-2 h-2 rounded-full bg-slate-300"></span>
+              </>
+            )}
           </button>
 
           {/* AI Math Tutor Panel Toggle */}
@@ -1035,6 +1103,10 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         boardId={board.id}
         isPhoneConnected={isPhoneConnected}
         onPhoneConnectionChange={setIsPhoneConnected}
+        onSessionReady={(sessId) => {
+          setPairedSessionId(sessId);
+          socket.bindRemote(sessId, 'display');
+        }}
       />
 
       <ShareModal

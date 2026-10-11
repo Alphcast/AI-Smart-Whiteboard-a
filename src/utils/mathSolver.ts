@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MathSolution, MathSolutionStep } from '../types/whiteboard';
+import { MathSolution, MathSolutionStep } from '../types/whiteboard.ts';
 
 /**
  * Local symbolic mathematics solver for linear, quadratic, and arithmetic equations.

@@ -15,6 +15,7 @@ interface ConnectPhoneModalProps {
   boardId: string;
   isPhoneConnected: boolean;
   onPhoneConnectionChange: (connected: boolean) => void;
+  onSessionReady?: (sessionId: string) => void;
 }
 
 export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
@@ -23,6 +24,7 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
   boardId,
   isPhoneConnected,
   onPhoneConnectionChange,
+  onSessionReady,
 }) => {
   const [sessionData, setSessionData] = useState<{
     sessionId: string;
@@ -45,6 +47,7 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
       .then(async (session) => {
         if (!isMounted) return;
         setSessionData(session);
+        onSessionReady?.(session.sessionId);
 
         // Bind laptop as display socket
         socket.bindRemote(session.sessionId, 'display');
