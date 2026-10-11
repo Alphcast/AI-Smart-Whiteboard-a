@@ -23,6 +23,7 @@ import {
   FileImage,
   FileCode,
   Copy,
+  Activity,
 } from 'lucide-react';
 import {
   Whiteboard,
@@ -42,6 +43,11 @@ import { ConnectPhoneModal } from '../remote/ConnectPhoneModal';
 import { ShareModal } from '../collaboration/ShareModal';
 import { ExportModal } from '../export/ExportModal';
 import { SettingsModal } from '../settings/SettingsModal';
+import { DiagnosticPanel } from './DiagnosticPanel';
+import { OfflineIndicator } from '../pwa/OfflineIndicator';
+import { PWAInstallButton } from '../pwa/PWAInstallButton';
+import { useOnlineStatus } from '../../hooks/useOnlineStatus';
+import { subscribeToSyncEvents } from '../../services/offlineSync';
 import { api } from '../../services/api';
 import { socket } from '../../services/socket';
 import { exportToPNG, exportToSVG, copyCanvasToClipboard } from '../../utils/export';
@@ -166,10 +172,13 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     y: number;
     isDown: boolean;
     mode: 'move' | 'draw' | 'laser';
+    pressure?: number;
   } | null>(null);
   const [isPhoneConnected, setIsPhoneConnected] = useState(false);
   const [isRemoteTransmitting, setIsRemoteTransmitting] = useState(false);
   const [pairedSessionId, setPairedSessionId] = useState<string | null>(null);
+  const [activePasscode, setActivePasscode] = useState<string | null>(null);
+  const [isDiagnosticPanelOpen, setIsDiagnosticPanelOpen] = useState(false);
   const transmitTimerRef = useRef<any>(null);
 
   const markTransmissionActive = useCallback(() => {
@@ -211,14 +220,119 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     };
   }, [boardId]);
 
+  // Logging helper for WhiteboardEditor connection events & heartbeat tracking
+  const logWhiteboard = useCallback((level: 'info' | 'warn' | 'error' | 'debug', msg: string, data?: any) => {
+    const time = new Date().toLocaleTimeString();
+    const prefix = `[WhiteboardEditor @ ${time}]`;
+    if (level === 'error') {
+      console.error(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else if (level === 'warn') {
+      console.warn(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else if (level === 'debug') {
+      console.debug(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else {
+      console.info(`${prefix} ${msg}`, data !== undefined ? data : '');
+    }
+  }, []);
+
   // 2. Setup Real-time WebSocket connection to Board Room
   useEffect(() => {
     const userColors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
     const randomColor = userColors[Math.floor(Math.random() * userColors.length)];
 
+    logWhiteboard('info', '🚀 Initializing real-time board session...', {
+      boardId,
+      isVercel: typeof window !== 'undefined' && window.location.hostname.includes('vercel.app'),
+      origin: typeof window !== 'undefined' ? window.location.origin : '',
+    });
+
     socket.joinBoard(boardId, {
       name: `User-${Math.floor(Math.random() * 900 + 100)}`,
       color: randomColor,
+    });
+
+    // Check and auto-bind active remote session if one already exists for this board, or provision one immediately
+    api
+      .getActiveSessionForBoard(boardId)
+      .then((active) => {
+        if (active) {
+          logWhiteboard('info', 'Found existing active remote session for board:', active);
+          setPairedSessionId(active.sessionId);
+          setActivePasscode(active.passcode);
+          socket.bindRemote(active.sessionId, 'display', active.passcode);
+          if (active.connectedControllers > 0) {
+            setIsPhoneConnected(true);
+          }
+        } else {
+          // Provision a session immediately so WebRTC host peer is always listening!
+          api
+            .createRemoteSession(boardId)
+            .then((newSess) => {
+              logWhiteboard('info', 'Auto-created remote pairing session for board:', newSess);
+              setPairedSessionId(newSess.sessionId);
+              setActivePasscode(newSess.passcode);
+              socket.bindRemote(newSess.sessionId, 'display', newSess.passcode);
+            })
+            .catch((e) => {
+              logWhiteboard('debug', 'Local pairing fallback ready:', e?.message || e);
+            });
+        }
+      })
+      .catch(() => {
+        api
+          .createRemoteSession(boardId)
+          .then((newSess) => {
+            setPairedSessionId(newSess.sessionId);
+            setActivePasscode(newSess.passcode);
+            socket.bindRemote(newSess.sessionId, 'display', newSess.passcode);
+          })
+          .catch(() => {});
+      });
+
+    // WebRTC Host Lifecycle Tracking
+    const unsubP2PHostInit = socket.on('p2p:init_host', (data) => {
+      logWhiteboard('info', '🌐 Registering WebRTC Host Peer for phone pairing:', data);
+    });
+
+    const unsubP2PHostReady = socket.on('p2p:host_ready', (data) => {
+      logWhiteboard('info', '✅ WebRTC Host Peer ready for smartphone connection:', data);
+    });
+
+    const unsubP2PIncoming = socket.on('p2p:incoming_connection', (data) => {
+      logWhiteboard('info', '📱 Smartphone attempting P2P connection...', data);
+    });
+
+    const unsubP2PSuccess = socket.on('p2p:handshake_success', (data) => {
+      logWhiteboard('info', '🎉 Smartphone paired via WebRTC P2P DataChannel! Low-latency touch input active.', data);
+    });
+
+    const unsubP2PClosed = socket.on('p2p:connection_closed', (data) => {
+      logWhiteboard('warn', '⚠️ Smartphone WebRTC DataChannel closed:', data);
+    });
+
+    const unsubP2PError = socket.on('p2p:connection_error', (data) => {
+      logWhiteboard('error', '❌ Smartphone WebRTC DataChannel error:', data);
+    });
+
+    const unsubP2PHostError = socket.on('p2p:host_error', (data) => {
+      logWhiteboard('warn', '⚠️ WebRTC PeerJS Host warning/error:', data);
+    });
+
+    // Socket.IO Connection & Heartbeat Tracking
+    const unsubSocketConnect = socket.on('socket:connect', (data) => {
+      logWhiteboard('info', '🟢 Socket.IO connected to server:', data);
+    });
+
+    const unsubSocketHeartbeat = socket.on('socket:heartbeat', (data) => {
+      logWhiteboard('debug', '💓 Socket.IO Heartbeat packet:', data);
+    });
+
+    const unsubSocketError = socket.on('socket:error', (data) => {
+      logWhiteboard('warn', '⚠️ Socket.IO connection error (if on Vercel, serverless functions do not keep persistent WebSockets; WebRTC P2P direct channels will handle smartphone events):', data);
+    });
+
+    const unsubSocketDisconnect = socket.on('socket:disconnect', (data) => {
+      logWhiteboard('warn', '🔌 Socket.IO disconnected:', data);
     });
 
     const unsubCursor = socket.on('board:cursor', (data) => {
@@ -238,29 +352,21 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       });
     });
 
-    // Check and auto-bind active remote session if one already exists for this board
-    api.getActiveSessionForBoard(boardId).then((active) => {
-      if (active) {
-        setPairedSessionId(active.sessionId);
-        socket.bindRemote(active.sessionId, 'display');
-        if (active.connectedControllers > 0) {
-          setIsPhoneConnected(true);
-        }
-      }
-    });
-
     const unsubPaired = socket.on('remote:phone_paired', (data) => {
       setIsPhoneConnected(true);
       if (data?.sessionId) setPairedSessionId(data.sessionId);
+      logWhiteboard('info', '📱 Smartphone remote paired notification received:', data);
       showToast('📱 Smartphone Remote Paired! Touchpad writing active.');
     });
 
     const unsubDisconnected = socket.on('remote:phone_disconnected', () => {
       setIsPhoneConnected(false);
+      logWhiteboard('warn', '📱 Smartphone remote disconnected notification received');
       showToast('📱 Smartphone Remote Disconnected');
     });
 
     const unsubStatus = socket.on('remote:status', (data) => {
+      logWhiteboard('debug', 'Remote status update:', data);
       if (data?.isPaired !== undefined) {
         setIsPhoneConnected(data.isPaired);
       }
@@ -277,15 +383,18 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         y: data.y,
         isDown: data.isDown,
         mode: data.mode || 'move',
+        pressure: data.pressure,
       });
     });
 
     // Remote phone drawing onto laptop canvas!
     const unsubStrokeStart = socket.on('remote:stroke_start', (data) => {
       markTransmissionActive();
+      logWhiteboard('debug', '✍️ Incoming remote touch stroke start:', { x: data.x, y: data.y, tool: data.tool, color: data.color, pressure: data.pressure });
       const newId = `remote-stroke-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       remoteStrokeId.current = newId;
       const targetPg = currentPageIdRef.current;
+      const initialPressure = typeof data.pressure === 'number' ? data.pressure : 1;
       const strokeObj: WhiteboardObject = {
         id: newId,
         pageId: targetPg,
@@ -296,7 +405,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         strokeData: {
-          points: [{ x: data.x, y: data.y }],
+          points: [{ x: data.x, y: data.y, pressure: initialPressure }],
           color: data.color || '#2563eb',
           size: data.size || 5,
           opacity: 1,
@@ -321,6 +430,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         y: data.y,
         isDown: true,
         mode: 'draw',
+        pressure: data.pressure,
       });
     });
 
@@ -329,6 +439,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       if (!remoteStrokeId.current) return;
       const sid = remoteStrokeId.current;
       const targetPg = currentPageIdRef.current;
+      const pointPressure = typeof data.pressure === 'number' ? data.pressure : 1;
 
       setBoard((prev) => {
         if (!prev) return prev;
@@ -339,7 +450,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
               ...obj,
               strokeData: {
                 ...obj.strokeData,
-                points: [...obj.strokeData.points, { x: data.x, y: data.y }],
+                points: [...obj.strokeData.points, { x: data.x, y: data.y, pressure: pointPressure }],
               },
             };
           }
@@ -356,10 +467,12 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         y: data.y,
         isDown: true,
         mode: 'draw',
+        pressure: data.pressure,
       });
     });
 
     const unsubStrokeEnd = socket.on('remote:stroke_end', () => {
+      logWhiteboard('debug', '✍️ Incoming remote touch stroke completed');
       remoteStrokeId.current = null;
       if (boardRef.current) {
         queueAutoSave(boardRef.current);
@@ -371,6 +484,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
     // Remote Phone Solves Math Equation!
     const unsubEquationSolve = socket.on('remote:equation_solve', (data) => {
+      logWhiteboard('info', '📐 Remote phone requested math equation solution:', data);
       const targetPg = currentPageIdRef.current;
       const expr = data.rawExpression;
       if (!expr) return;
@@ -402,6 +516,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
     // Remote Phone Actions
     const unsubAction = socket.on('remote:action', (data) => {
+      logWhiteboard('info', '📱 Remote phone action triggered:', data.action);
       if (data.action === 'undo') handleUndo();
       else if (data.action === 'redo') handleRedo();
       else if (data.action === 'zoom_in') setZoom((z) => Math.min(z * 1.2, 5));
@@ -417,11 +532,36 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     });
 
     const unsubToolChange = socket.on('remote:tool_change', (data) => {
+      logWhiteboard('info', '📱 Remote phone tool change:', data);
       if (data.tool) setCurrentTool(data.tool);
       if (data.color) setColor(data.color);
     });
 
+    // Periodic Heartbeat Status Logger (every 15s) to console
+    const heartbeatInterval = setInterval(() => {
+      const diag = socket.getDiagnostics();
+      logWhiteboard('info', '💓 Socket & P2P Heartbeat Status Check:', {
+        status: diag.connectionStatus,
+        socketIO: diag.socketIO,
+        webRTC: diag.webRTC,
+        isVercel: diag.isVercel,
+        timeSinceLastHeartbeatMs: Date.now() - diag.lastHeartbeatTime,
+      });
+    }, 15000);
+
     return () => {
+      clearInterval(heartbeatInterval);
+      unsubP2PHostInit();
+      unsubP2PHostReady();
+      unsubP2PIncoming();
+      unsubP2PSuccess();
+      unsubP2PClosed();
+      unsubP2PError();
+      unsubP2PHostError();
+      unsubSocketConnect();
+      unsubSocketHeartbeat();
+      unsubSocketError();
+      unsubSocketDisconnect();
       unsubCursor();
       unsubPaired();
       unsubDisconnected();
@@ -434,7 +574,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubAction();
       unsubToolChange();
     };
-  }, [boardId, markTransmissionActive, showToast]);
+  }, [boardId, markTransmissionActive, showToast, logWhiteboard]);
 
   // 3. Auto-save handler
   const queueAutoSave = useCallback((updatedBoard: Whiteboard) => {
@@ -456,6 +596,43 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         });
     }, 600);
   }, []);
+
+  // Offline / Online Intermittent Drops Auto-Sync Handler
+  const isOnline = useOnlineStatus();
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleManualSync = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      const count = await api.syncPendingOfflineUpdates();
+      if (count > 0) {
+        setSaveStatus('saved');
+        showToast(`Synced ${count} cached updates with server!`);
+      } else {
+        setSaveStatus('saved');
+      }
+    } catch (err) {
+      console.warn('[WhiteboardEditor] Offline queue sync failed:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    const unsub = subscribeToSyncEvents((event) => {
+      if (event === 'online') {
+        handleManualSync();
+      } else if (event === 'offline') {
+        setSaveStatus('offline');
+      }
+    });
+
+    if (isOnline && saveStatus === 'offline') {
+      handleManualSync();
+    }
+
+    return () => unsub();
+  }, [isOnline, saveStatus, handleManualSync]);
 
   // Update object state + push to history
   const updateObjectsWithHistory = useCallback(
@@ -876,6 +1053,20 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
             )}
           </button>
 
+          {/* Real-time Socket & Connection Diagnostics Panel Toggle */}
+          <button
+            onClick={() => setIsDiagnosticPanelOpen(!isDiagnosticPanelOpen)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border cursor-pointer ${
+              isDiagnosticPanelOpen
+                ? 'bg-blue-600 text-white border-blue-700 shadow-sm'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+            }`}
+            title="Open Live Socket Events & Vercel Connection Diagnostics"
+          >
+            <Activity className={`w-4 h-4 ${isPhoneConnected ? 'text-emerald-500 animate-pulse' : 'text-blue-600'}`} />
+            <span className="hidden sm:inline">Diagnostics</span>
+          </button>
+
           {/* AI Math Tutor Panel Toggle */}
           <button
             onClick={() => setIsAIPanelOpen(!isAIPanelOpen)}
@@ -972,6 +1163,9 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
               </div>
             )}
           </div>
+
+          {/* PWA Install Button */}
+          <PWAInstallButton variant="compact" />
 
           {/* Settings */}
           <button
@@ -1103,10 +1297,22 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         boardId={board.id}
         isPhoneConnected={isPhoneConnected}
         onPhoneConnectionChange={setIsPhoneConnected}
-        onSessionReady={(sessId) => {
+        onSessionReady={(sessId, pass) => {
           setPairedSessionId(sessId);
-          socket.bindRemote(sessId, 'display');
+          setActivePasscode(pass || null);
+          socket.bindRemote(sessId, 'display', pass);
         }}
+      />
+
+      <DiagnosticPanel
+        isOpen={isDiagnosticPanelOpen}
+        onClose={() => setIsDiagnosticPanelOpen(false)}
+        boardId={board.id}
+        remotePointer={remotePointer}
+        isPhoneConnected={isPhoneConnected}
+        pairedSessionId={pairedSessionId}
+        activePasscode={activePasscode}
+        onToast={showToast}
       />
 
       <ShareModal
@@ -1135,6 +1341,9 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* Offline & Connection Drop Resilience Indicator */}
+      <OfflineIndicator onRetrySync={handleManualSync} isSyncing={isSyncing} />
     </div>
   );
 };

@@ -15,7 +15,7 @@ interface ConnectPhoneModalProps {
   boardId: string;
   isPhoneConnected: boolean;
   onPhoneConnectionChange: (connected: boolean) => void;
-  onSessionReady?: (sessionId: string) => void;
+  onSessionReady?: (sessionId: string, passcode?: string) => void;
 }
 
 export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
@@ -36,6 +36,8 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const pollIntervalRef = React.useRef<any>(null);
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -47,10 +49,10 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
       .then(async (session) => {
         if (!isMounted) return;
         setSessionData(session);
-        onSessionReady?.(session.sessionId);
+        onSessionReady?.(session.sessionId, session.passcode);
 
-        // Bind laptop as display socket
-        socket.bindRemote(session.sessionId, 'display');
+        // Bind laptop as display socket with WebRTC P2P passcode host
+        socket.bindRemote(session.sessionId, 'display', session.passcode);
 
         // Always prioritize the live browser origin (so phone connects to the exact same deployment/Vercel URL)
         const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -70,7 +72,8 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
         }
 
         // Poll session status periodically as secondary check
-        const pollInterval = setInterval(async () => {
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = setInterval(async () => {
           if (!isMounted) return;
           try {
             const status = await api.getRemoteSession(session.sessionId);
@@ -81,8 +84,6 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
             // ignore
           }
         }, 1500);
-
-        return () => clearInterval(pollInterval);
       })
       .catch((err) => {
         console.error('Failed to create remote session:', err);
@@ -100,10 +101,14 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
 
     return () => {
       isMounted = false;
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
       unsubPaired();
       unsubDisconnect();
     };
-  }, [isOpen, boardId, onPhoneConnectionChange]);
+  }, [isOpen, boardId, onPhoneConnectionChange, onSessionReady]);
 
   if (!isOpen) return null;
 

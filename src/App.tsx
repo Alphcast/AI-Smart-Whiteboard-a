@@ -9,6 +9,7 @@ import { MarketingLanding } from './components/marketing/MarketingLanding';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { WhiteboardEditor } from './components/whiteboard/WhiteboardEditor';
 import { PhoneRemoteController } from './components/remote/PhoneRemoteController';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import { api } from './services/api';
 
 type AppView = 'landing' | 'dashboard' | 'whiteboard' | 'remote';
@@ -106,14 +107,16 @@ export default function App() {
         />
       )}
 
-      {currentView === 'dashboard' && (
-        <Dashboard
-          onOpenBoard={handleOpenBoard}
-          onCreateNewBoard={handleCreateNewBoard}
-          onNavigateHome={() => handleNavigate('landing')}
-          onNavigateRemote={() => setCurrentView('remote')}
-        />
-      )}
-    </div>
-  );
-}
+        {currentView === 'dashboard' && (
+          <Dashboard
+            onOpenBoard={handleOpenBoard}
+            onCreateNewBoard={handleCreateNewBoard}
+            onNavigateHome={() => handleNavigate('landing')}
+            onNavigateRemote={() => setCurrentView('remote')}
+          />
+        )}
+
+        <OfflineIndicator />
+      </div>
+    );
+  }

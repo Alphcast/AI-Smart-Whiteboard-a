@@ -5,6 +5,13 @@
 
 import { Whiteboard, MathSolution } from '../types/whiteboard';
 import { solveEquationLocally } from '../utils/mathSolver';
+import {
+  cacheActiveBoardSnapshot,
+  getCachedBoardSnapshot,
+  queuePendingBoardUpdate,
+  clearPendingBoardUpdate,
+  flushPendingSyncQueue,
+} from './offlineSync';
 
 const STORAGE_KEY = 'ai_whiteboard_offline_boards';
 
@@ -158,12 +165,19 @@ export const api = {
         if (json.success && json.data) {
           const list = getStoredLocalBoards().filter((b) => b.id !== id);
           saveStoredLocalBoards([json.data, ...list]);
+          cacheActiveBoardSnapshot(json.data);
           return json.data;
         }
       }
     } catch {
-      // Offline fallback
+      // Offline fallback: try active snapshot first, then stored boards
     }
+
+    const cachedSnapshot = getCachedBoardSnapshot(id);
+    if (cachedSnapshot) return cachedSnapshot;
+
+    const stored = getStoredLocalBoards().find((b) => b.id === id);
+    if (stored) return stored;
 
     return getFallbackInitialBoard(id);
   },
@@ -204,6 +218,7 @@ export const api = {
         if (json.success && json.data) {
           const list = getStoredLocalBoards();
           saveStoredLocalBoards([json.data, ...list]);
+          cacheActiveBoardSnapshot(json.data);
           return json.data;
         }
       }
@@ -213,20 +228,23 @@ export const api = {
 
     const list = getStoredLocalBoards();
     saveStoredLocalBoards([newBoard, ...list]);
+    cacheActiveBoardSnapshot(newBoard);
     return newBoard;
   },
 
   async updateBoard(id: string, updates: Partial<Whiteboard>): Promise<Whiteboard> {
-    // Update local cache immediately
+    // 1. Update local state & active snapshot immediately so drops never lose drawing strokes
     const list = getStoredLocalBoards();
-    let currentBoard = list.find((b) => b.id === id) || getFallbackInitialBoard(id);
+    let currentBoard = getCachedBoardSnapshot(id) || list.find((b) => b.id === id) || getFallbackInitialBoard(id);
     const updated: Whiteboard = {
       ...currentBoard,
       ...updates,
       updatedAt: new Date().toISOString(),
     };
     saveStoredLocalBoards([updated, ...list.filter((b) => b.id !== id)]);
+    cacheActiveBoardSnapshot(updated);
 
+    // 2. Try network update
     try {
       const res = await fetch(`/api/boards/${id}`, {
         method: 'PUT',
@@ -236,14 +254,30 @@ export const api = {
       if (res.ok) {
         const json = await safeJson(res);
         if (json.success && json.data) {
+          clearPendingBoardUpdate(id);
           return json.data;
         }
       }
+      // If server responded with error status, queue for sync
+      queuePendingBoardUpdate(id, updates);
     } catch {
-      // Saved in localStorage
+      // Network drop or offline: queue for sync as soon as connection is restored
+      queuePendingBoardUpdate(id, updates);
     }
 
     return updated;
+  },
+
+  async syncPendingOfflineUpdates(): Promise<number> {
+    return flushPendingSyncQueue(async (bId, bUpdates) => {
+      const res = await fetch(`/api/boards/${bId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bUpdates),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    });
   },
 
   async deleteBoard(id: string, permanent = false): Promise<void> {

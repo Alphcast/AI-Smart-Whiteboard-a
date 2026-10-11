@@ -17,6 +17,7 @@ interface RemotePointer {
   y: number;
   isDown: boolean;
   mode: 'move' | 'draw' | 'laser';
+  pressure?: number;
 }
 
 interface WhiteboardCanvasProps {
@@ -190,17 +191,38 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         const { points, color: strokeColor, size, opacity, tool } = obj.strokeData;
         if (points.length > 0) {
           ctx.strokeStyle = strokeColor;
-          ctx.lineWidth = size;
+          ctx.fillStyle = strokeColor;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.globalAlpha = tool === 'highlighter' ? 0.35 : opacity;
 
-          ctx.beginPath();
+          const hasPressureData = points.some((p) => typeof p.pressure === 'number' && p.pressure > 0);
+
           if (points.length === 1) {
-            ctx.arc(points[0].x, points[0].y, size / 2, 0, Math.PI * 2);
-            ctx.fillStyle = strokeColor;
+            const p = points[0];
+            const pRadius = hasPressureData && p.pressure ? (size * Math.max(0.3, Math.min(2.5, p.pressure))) / 2 : size / 2;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, pRadius, 0, Math.PI * 2);
             ctx.fill();
+          } else if (hasPressureData) {
+            // Render variable-width segments based on point pressure intensity
+            for (let i = 1; i < points.length; i++) {
+              const p0 = points[i - 1];
+              const p1 = points[i];
+              const press0 = typeof p0.pressure === 'number' ? p0.pressure : 1;
+              const press1 = typeof p1.pressure === 'number' ? p1.pressure : 1;
+              const avgPressure = (press0 + press1) / 2;
+              const segWidth = Math.max(1, size * Math.max(0.2, Math.min(2.5, avgPressure)));
+
+              ctx.lineWidth = segWidth;
+              ctx.beginPath();
+              ctx.moveTo(p0.x, p0.y);
+              ctx.lineTo(p1.x, p1.y);
+              ctx.stroke();
+            }
           } else {
+            ctx.lineWidth = size;
+            ctx.beginPath();
             ctx.moveTo(points[0].x, points[0].y);
             for (let i = 1; i < points.length; i++) {
               // Smooth quadratic Bezier curve
@@ -357,17 +379,22 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         ctx.arc(rx, ry, 8 / zoom, 0, Math.PI * 2);
         ctx.fill();
       } else if (mode === 'draw') {
-        // Phone writing ink indicator
+        // Phone writing ink indicator with dynamic pressure size
+        const pressScale = typeof remotePointer.pressure === 'number' && remotePointer.pressure > 0
+          ? Math.max(0.4, Math.min(2.2, remotePointer.pressure))
+          : 1;
+        const pointerRadius = (6 * pressScale) / zoom;
         ctx.fillStyle = '#2563eb';
         ctx.shadowColor = '#2563eb';
         ctx.shadowBlur = 12;
         ctx.beginPath();
-        ctx.arc(rx, ry, 6 / zoom, 0, Math.PI * 2);
+        ctx.arc(rx, ry, pointerRadius, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.font = `bold ${10 / zoom}px sans-serif`;
         ctx.fillStyle = '#2563eb';
-        ctx.fillText('✍️ Phone Writing', rx + 10 / zoom, ry + 4 / zoom);
+        const pressPct = remotePointer.pressure ? ` (${Math.round(remotePointer.pressure * 100)}%)` : '';
+        ctx.fillText(`✍️ Phone Writing${pressPct}`, rx + 10 / zoom, ry + 4 / zoom);
       } else {
         // Glowing phone cursor
         ctx.fillStyle = '#3b82f6';

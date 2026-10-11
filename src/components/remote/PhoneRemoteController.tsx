@@ -26,6 +26,9 @@ import {
   WifiOff,
   Crosshair,
   ArrowUpLeft,
+  Sliders,
+  Gauge,
+  HelpCircle,
 } from 'lucide-react';
 import { socket } from '../../services/socket';
 import { api } from '../../services/api';
@@ -47,6 +50,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [showPhoneDiag, setShowPhoneDiag] = useState(false);
 
   // Controller Mode: 'touchpad' (trackpad writing & cursor) vs 'draw' (full handwriting screen)
   const [controlMode, setControlMode] = useState<'touchpad' | 'draw'>('touchpad');
@@ -58,6 +62,17 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   const [activeTool, setActiveTool] = useState<'pen' | 'eraser'>('pen');
   const [selectedColor, setSelectedColor] = useState<string>('#2563eb');
   const [strokeSize, setStrokeSize] = useState<number>(5);
+
+  // Touch Pressure & Sensitivity settings
+  const [pressureEnabled, setPressureEnabled] = useState<boolean>(true);
+  const [pressureSensitivity, setPressureSensitivity] = useState<number>(1.2); // 0.4 (subtle) to 2.5 (extreme)
+  const [minStrokeScale, setMinStrokeScale] = useState<number>(0.3); // minimum stroke fraction
+  const [maxStrokeScale, setMaxStrokeScale] = useState<number>(2.4); // maximum stroke multiplier
+  const [pressureCurve, setPressureCurve] = useState<'linear' | 'ease-in' | 'expressive'>('expressive');
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [liveTouchPressure, setLiveTouchPressure] = useState<number>(0);
+  const lastTouchTime = useRef<number>(0);
+  const smoothedPressure = useRef<number>(1.0);
 
   // Real-time Transmission Activity
   const [isTransmitting, setIsTransmitting] = useState(false);
@@ -104,82 +119,250 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     }, 250);
   }, []);
 
-  // Connect to session
+  // Calculate normalized stroke pressure multiplier based on touch pressure, contact radius, and sensitivity curves
+  const computeNormalizedPressure = useCallback(
+    (touch: React.Touch, dx = 0, dy = 0, dt = 16): number => {
+      if (!pressureEnabled) return 1.0;
+
+      let rawPressure = 0.5;
+
+      const extendedTouch = touch as any;
+
+      // 1. Hardware Force / Pressure API (Supported by iOS 3D Touch, Apple Pencil, modern Android styluses & screens)
+      if (typeof extendedTouch.force === 'number' && extendedTouch.force > 0) {
+        rawPressure = extendedTouch.force; // 0.0 to 1.0
+      } else {
+        // 2. Touch Contact Area estimation (radiusX & radiusY)
+        const rx = (extendedTouch.radiusX as number) || 10;
+        const ry = (extendedTouch.radiusY as number) || 10;
+        const avgRadius = (rx + ry) / 2;
+        // Standard finger contact typically ranges from ~8px (light tap) to ~28px (firm press)
+        const estimatedFromArea = Math.min(1.0, Math.max(0.1, (avgRadius - 7) / 20));
+
+        // 3. Velocity estimation: Faster strokes are naturally lighter, slower deliberate strokes are firmer
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const speed = dt > 0 ? dist / dt : 0; // px/ms
+        const speedFactor = Math.max(0.5, Math.min(1.5, 1.2 - speed * 0.35));
+
+        rawPressure = estimatedFromArea * 0.7 + (1.0 - Math.min(1.0, speed * 0.5)) * 0.3;
+      }
+
+      // Smooth pressure with exponential moving average to avoid jittery step-changes
+      smoothedPressure.current = smoothedPressure.current * 0.4 + rawPressure * 0.6;
+      let p = smoothedPressure.current;
+
+      // Apply pressure curve transformation
+      if (pressureCurve === 'ease-in') {
+        p = Math.pow(p, 1.6);
+      } else if (pressureCurve === 'expressive') {
+        // S-curve for rich calligraphic variation between soft strokes and bold accents
+        p = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      }
+
+      // Scale by user sensitivity preference (0.4x to 2.5x)
+      const adjusted = p * pressureSensitivity;
+
+      // Clamp between min and max stroke scale
+      const finalScale = Math.max(minStrokeScale, Math.min(maxStrokeScale, adjusted));
+      setLiveTouchPressure(finalScale);
+      return finalScale;
+    },
+    [pressureEnabled, pressureSensitivity, minStrokeScale, maxStrokeScale, pressureCurve]
+  );
+  const logPhone = useCallback((level: 'info' | 'warn' | 'error' | 'debug', msg: string, data?: any) => {
+    const time = new Date().toLocaleTimeString();
+    const prefix = `[PhoneRemote @ ${time}]`;
+    if (level === 'error') {
+      console.error(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else if (level === 'warn') {
+      console.warn(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else if (level === 'debug') {
+      console.debug(`${prefix} ${msg}`, data !== undefined ? data : '');
+    } else {
+      console.info(`${prefix} ${msg}`, data !== undefined ? data : '');
+    }
+  }, []);
+
+  // Connect to session with immediate WebRTC P2P + Socket binding
   const connectToSession = useCallback(
     async (sessId: string, pass?: string) => {
       setIsConnecting(true);
       setConnectionError(null);
 
-      try {
-        // Verify session exists via API
-        const sessionInfo = await api.getRemoteSession(sessId);
-        setActiveSessionId(sessId);
-        setActivePasscode(pass || sessionInfo.passcode);
+      const effectivePass = (pass || '').trim().toUpperCase();
+      const effectiveSess = sessId || `sess-${effectivePass.toLowerCase()}`;
 
-        // Bind via Socket.IO
-        socket.bindRemote(sessId, 'controller', pass || sessionInfo.passcode, navigator.userAgent);
-        setIsConnected(true);
-        triggerHaptic(30);
-      } catch (err: any) {
-        console.warn('Connection attempt failed:', err);
-        setConnectionError('Could not connect to session. Check code or refresh laptop.');
-        setIsConnected(false);
+      setActiveSessionId(effectiveSess);
+      if (effectivePass) setActivePasscode(effectivePass);
+
+      logPhone('info', '🚀 Initiating phone remote pairing...', {
+        sessionId: effectiveSess,
+        passcode: effectivePass,
+        targetP2PHost: `wb-smart-${effectivePass.toLowerCase()}`,
+        isVercel: typeof window !== 'undefined' && window.location.hostname.includes('vercel.app'),
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+      });
+
+      // Bind via WebRTC P2P and Socket.IO immediately
+      socket.bindRemote(effectiveSess, 'controller', effectivePass || undefined, navigator.userAgent);
+      setIsConnected(true);
+      triggerHaptic(30);
+
+      try {
+        logPhone('debug', 'Fetching session verification metadata from server...');
+        const sessionInfo = await api.getRemoteSession(effectiveSess);
+        if (sessionInfo?.passcode) {
+          setActivePasscode(sessionInfo.passcode);
+          logPhone('info', '✅ Session verified with server API:', sessionInfo);
+        }
+      } catch (apiErr: any) {
+        logPhone('warn', '⚠️ API session query unavailable on serverless container (normal on Vercel) - WebRTC P2P direct channel will operate independently:', apiErr?.message || apiErr);
       } finally {
         setIsConnecting(false);
       }
     },
-    [triggerHaptic]
+    [triggerHaptic, logPhone]
   );
 
-  // Auto-connect if initialSessionId provided
+  // Auto-connect if initialSessionId or passcode provided
   useEffect(() => {
-    if (initialSessionId) {
-      connectToSession(initialSessionId, initialPasscode);
-    }
-  }, [initialSessionId, initialPasscode, connectToSession]);
+    const searchParams = new URLSearchParams(window.location.search);
+    const codeParam = searchParams.get('code') || initialPasscode;
+    const sessionParam = searchParams.get('session') || initialSessionId;
 
-  // Handle socket events
+    if (sessionParam || codeParam) {
+      logPhone('info', 'Auto-connecting from URL parameters:', { session: sessionParam, code: codeParam });
+      connectToSession(sessionParam || `sess-${(codeParam || '').toLowerCase()}`, codeParam || undefined);
+    }
+  }, [initialSessionId, initialPasscode, connectToSession, logPhone]);
+
+  // Handle socket, WebRTC P2P, and heartbeat events with console diagnostic logging
   useEffect(() => {
-    const unsubConnected = socket.on('remote:connected', () => {
+    logPhone('info', 'Setting up connection event listeners & heartbeat monitors...');
+
+    const unsubConnected = socket.on('remote:connected', (data) => {
+      setIsConnected(true);
+      setConnectionError(null);
+      logPhone('info', '🎉 Connected to whiteboard remote session!', data);
+    });
+
+    const unsubStatus = socket.on('remote:status', (data) => {
+      logPhone('debug', 'Remote session status update received:', data);
+      if (data?.isPaired !== undefined) {
+        setIsConnected(data.isPaired);
+      } else {
+        setIsConnected(true);
+      }
+    });
+
+    // WebRTC P2P Handshake Tracking
+    const unsubP2PStarted = socket.on('p2p:handshake_started', (data) => {
+      logPhone('info', '🤝 WebRTC P2P handshake started with target host:', data);
+    });
+
+    const unsubP2PSuccess = socket.on('p2p:handshake_success', (data) => {
+      logPhone('info', '🟢 WebRTC P2P DataChannel OPEN! Direct low-latency peer-to-peer connection active.', data);
       setIsConnected(true);
       setConnectionError(null);
     });
 
-    const unsubStatus = socket.on('remote:status', () => {
-      setIsConnected(true);
+    const unsubP2PClosed = socket.on('p2p:connection_closed', (data) => {
+      logPhone('warn', '⚠️ WebRTC P2P DataChannel closed:', data);
+    });
+
+    const unsubP2PError = socket.on('p2p:connection_error', (data) => {
+      logPhone('error', '❌ WebRTC P2P connection error:', data);
+    });
+
+    const unsubP2PClientError = socket.on('p2p:client_error', (data) => {
+      logPhone('error', '❌ WebRTC PeerJS client error:', data);
+    });
+
+    // Socket.IO Connection & Heartbeat Tracking
+    const unsubSocketConnect = socket.on('socket:connect', (data) => {
+      logPhone('info', '🟢 Socket.IO connected to server:', data);
+    });
+
+    const unsubSocketHeartbeat = socket.on('socket:heartbeat', (data) => {
+      logPhone('debug', '💓 Socket.IO Heartbeat packet:', data);
+    });
+
+    const unsubSocketUpgrade = socket.on('socket:transport_upgrade', (data) => {
+      logPhone('info', '🚀 Socket.IO transport upgraded:', data);
+    });
+
+    const unsubSocketError = socket.on('socket:error', (data) => {
+      logPhone('warn', '⚠️ Socket.IO connection error (if on Vercel, serverless function may not support persistent WebSockets; WebRTC P2P will handle data):', data);
+    });
+
+    const unsubSocketReconnect = socket.on('socket:reconnect_attempt', (data) => {
+      logPhone('debug', '🔄 Socket.IO attempting reconnection...', data);
     });
 
     const unsubDisconnect = socket.on('remote:disconnect', () => {
-      setIsConnected(false);
+      logPhone('warn', 'Remote session disconnect notification received');
+      if (!socket.isConnected()) {
+        setIsConnected(false);
+      }
     });
 
-    const unsubConnClose = socket.on('connection:close', () => {
-      setIsConnected(false);
+    const unsubConnClose = socket.on('connection:close', (data) => {
+      logPhone('warn', 'Connection closed:', data);
+      if (!socket.isConnected()) {
+        setIsConnected(false);
+      }
     });
 
     const unsubConnOpen = socket.on('connection:open', () => {
+      logPhone('info', 'Underlying connection opened');
       if (activeSessionId) {
-        socket.bindRemote(activeSessionId, 'controller', activePasscode);
+        socket.bindRemote(activeSessionId, 'controller', activePasscode || undefined);
         setIsConnected(true);
       }
     });
 
     const unsubError = socket.on('remote:error', (data) => {
-      setConnectionError(data.message || 'Remote session error');
-      setIsConnected(false);
+      logPhone('error', '❌ Remote session error event:', data);
+      if (!socket.isConnected()) {
+        setConnectionError(data.message || 'Remote session error');
+        setIsConnected(false);
+      }
     });
 
+    // Periodic Heartbeat Status Logger (every 15s) to console
+    const heartbeatInterval = setInterval(() => {
+      const diag = socket.getDiagnostics();
+      logPhone('info', '💓 Socket & P2P Heartbeat Status Check:', {
+        status: diag.connectionStatus,
+        socketIO: diag.socketIO,
+        webRTC: diag.webRTC,
+        isVercel: diag.isVercel,
+        timeSinceLastHeartbeatMs: Date.now() - diag.lastHeartbeatTime,
+      });
+    }, 15000);
+
     return () => {
+      clearInterval(heartbeatInterval);
       unsubConnected();
       unsubStatus();
+      unsubP2PStarted();
+      unsubP2PSuccess();
+      unsubP2PClosed();
+      unsubP2PError();
+      unsubP2PClientError();
+      unsubSocketConnect();
+      unsubSocketHeartbeat();
+      unsubSocketUpgrade();
+      unsubSocketError();
+      unsubSocketReconnect();
       unsubDisconnect();
       unsubConnClose();
       unsubConnOpen();
       unsubError();
     };
-  }, [activeSessionId, activePasscode]);
+  }, [activeSessionId, activePasscode, logPhone]);
 
-  // Send event via Socket.IO
+  // Send event via WebRTC DataChannel, Socket.IO, and HTTP fallback
   const sendEvent = useCallback(
     (type: string, payload: any = {}) => {
       pulseTransmitting();
@@ -191,17 +374,21 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
   // Manual code entry submission
   const handleLookupAndConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputCode.trim()) return;
+    const clean = inputCode.trim().toUpperCase();
+    if (clean.length < 4) return;
     setIsConnecting(true);
     setConnectionError(null);
 
-    try {
-      const found = await api.lookupSessionByCode(inputCode.trim());
-      await connectToSession(found.sessionId, found.passcode);
-    } catch {
-      setConnectionError('Invalid code. Please enter the 6-character code from your laptop.');
-      setIsConnecting(false);
-    }
+    const fallbackSession = `sess-${clean.toLowerCase()}`;
+    await connectToSession(fallbackSession, clean);
+
+    api.lookupSessionByCode(clean).then((found) => {
+      if (found?.sessionId) {
+        setActiveSessionId(found.sessionId);
+      }
+    }).catch(() => {
+      // Serverless fallback
+    });
   };
 
   // Resize phone drawing canvas
@@ -239,14 +426,18 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     const px = touch.clientX - rect.left;
     const py = touch.clientY - rect.top;
 
+    lastTouchTime.current = Date.now();
     isPhonePointerDown.current = true;
     currentPhoneStroke.current = [{ x: px, y: py }];
+
+    const pressure = computeNormalizedPressure(touch, 0, 0, 16);
+    const effectiveStrokeWidth = Math.max(1, strokeSize * pressure);
 
     // Draw locally on phone
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.beginPath();
-      ctx.arc(px, py, strokeSize / 2, 0, Math.PI * 2);
+      ctx.arc(px, py, effectiveStrokeWidth / 2, 0, Math.PI * 2);
       ctx.fillStyle = activeTool === 'eraser' ? '#0f172a' : selectedColor;
       ctx.fill();
     }
@@ -262,6 +453,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
       color: activeTool === 'eraser' ? '#ffffff' : selectedColor,
       size: strokeSize * 1.5,
       tool: activeTool,
+      pressure,
     });
   };
 
@@ -277,13 +469,28 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     const px = touch.clientX - rect.left;
     const py = touch.clientY - rect.top;
 
+    const now = Date.now();
+    const dt = Math.max(1, now - (lastTouchTime.current || now));
+    lastTouchTime.current = now;
+
     const pts = currentPhoneStroke.current;
+    let dx = 0;
+    let dy = 0;
+    if (pts.length > 0) {
+      const prev = pts[pts.length - 1];
+      dx = px - prev.x;
+      dy = py - prev.y;
+    }
+
+    const pressure = computeNormalizedPressure(touch, dx, dy, dt);
+    const effectiveStrokeWidth = Math.max(1, strokeSize * pressure);
+
     if (pts.length > 0) {
       const prev = pts[pts.length - 1];
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.strokeStyle = activeTool === 'eraser' ? '#0f172a' : selectedColor;
-        ctx.lineWidth = strokeSize;
+        ctx.lineWidth = effectiveStrokeWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.beginPath();
@@ -301,6 +508,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     sendEvent('remote:stroke_point', {
       x: wbX,
       y: wbY,
+      pressure,
     });
   };
 
@@ -365,12 +573,15 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     e.preventDefault();
     const touch = e.touches[0];
     lastTouch.current = { x: touch.clientX, y: touch.clientY };
+    lastTouchTime.current = Date.now();
     isTouchpadDown.current = true;
 
     const trackpadRect = e.currentTarget.getBoundingClientRect();
     const localX = touch.clientX - trackpadRect.left;
     const localY = touch.clientY - trackpadRect.top;
     touchTrail.current.push({ x: localX, y: localY, age: 0 });
+
+    const pressure = computeNormalizedPressure(touch, 0, 0, 16);
 
     triggerHaptic(10);
 
@@ -382,6 +593,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         color: activeTool === 'eraser' ? '#ffffff' : selectedColor,
         size: strokeSize * 1.5,
         tool: activeTool,
+        pressure,
       });
 
       sendEvent('remote:pointer', {
@@ -389,6 +601,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         y: virtualCursor.current.y,
         isDown: true,
         mode: 'draw',
+        pressure,
       });
     } else {
       sendEvent('remote:pointer', {
@@ -396,6 +609,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         y: virtualCursor.current.y,
         isDown: true,
         mode: touchpadAction === 'laser' ? 'laser' : 'move',
+        pressure,
       });
     }
   };
@@ -407,6 +621,12 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
     const touch = e.touches[0];
     const dx = (touch.clientX - lastTouch.current.x) * 2.3;
     const dy = (touch.clientY - lastTouch.current.y) * 2.3;
+
+    const now = Date.now();
+    const dt = Math.max(1, now - (lastTouchTime.current || now));
+    lastTouchTime.current = now;
+
+    const pressure = computeNormalizedPressure(touch, dx, dy, dt);
 
     lastTouch.current = { x: touch.clientX, y: touch.clientY };
 
@@ -424,6 +644,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
       sendEvent('remote:stroke_point', {
         x: virtualCursor.current.x,
         y: virtualCursor.current.y,
+        pressure,
       });
 
       sendEvent('remote:pointer', {
@@ -431,6 +652,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         y: virtualCursor.current.y,
         isDown: true,
         mode: 'draw',
+        pressure,
       });
     } else {
       sendEvent('remote:pointer', {
@@ -438,6 +660,7 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
         y: virtualCursor.current.y,
         isDown: true,
         mode: touchpadAction === 'laser' ? 'laser' : 'move',
+        pressure,
       });
     }
   };
@@ -575,7 +798,11 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
       {/* Top Mobile Header & Connection Status Banner */}
       <header className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0 z-20">
         {/* Real-time Connection Status Indicator */}
-        <div className="flex items-center gap-2.5">
+        <div
+          onClick={() => setShowPhoneDiag(true)}
+          className="flex items-center gap-2.5 cursor-pointer active:opacity-75 transition-opacity"
+          title="Click to view mobile connection diagnostics"
+        >
           <div className="relative flex h-3 w-3 items-center justify-center">
             {isConnected ? (
               <>
@@ -600,12 +827,12 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
               {isTransmitting ? (
                 <span className="text-emerald-400 font-semibold flex items-center gap-1 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  Transmitting Touch live
+                  Transmitting Touch ({txPacketsCount})
                 </span>
               ) : isConnected ? (
-                <span>WebSocket Link Active</span>
+                <span className="text-emerald-400">P2P Channel Active • Tap for info</span>
               ) : (
-                <span>Reconnecting...</span>
+                <span className="text-amber-400">Connecting... • Tap for info</span>
               )}
             </div>
           </div>
@@ -751,11 +978,25 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                 </div>
               )}
 
-              {/* Reset Cursor & Solve Math buttons */}
+              {/* Reset Cursor, Pressure Settings & Solve Math buttons */}
               <div className="flex items-center gap-1">
+                {/* Touch Pressure Sensitivity Setting Button */}
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                    pressureEnabled
+                      ? 'bg-blue-950/80 border-blue-500/40 text-blue-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-400'
+                  }`}
+                  title="Configure Touch Pressure & Sensitivity"
+                >
+                  <Gauge className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Sensitivity</span>
+                </button>
+
                 <button
                   onClick={handleResetCursor}
-                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg"
+                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg cursor-pointer"
                   title="Recenter Cursor on Whiteboard"
                 >
                   <Crosshair className="w-3.5 h-3.5" />
@@ -888,8 +1129,20 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                 ))}
               </div>
 
-              {/* Clear & Solve Math shortcuts */}
+              {/* Sensitivity, Clear & Solve Math shortcuts */}
               <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                    pressureEnabled
+                      ? 'bg-blue-950/80 border-blue-500/40 text-blue-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-400'
+                  }`}
+                  title="Configure Touch Pressure & Sensitivity"
+                >
+                  <Gauge className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Pressure</span>
+                </button>
                 <button
                   onClick={handleClearPhoneCanvas}
                   className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg cursor-pointer"
@@ -1067,6 +1320,314 @@ export const PhoneRemoteController: React.FC<PhoneRemoteControllerProps> = ({
                   <span>Solve & Reflect on Laptop</span>
                 </>
               )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Diagnostic Popup Modal */}
+      {showPhoneDiag && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-4 text-xs text-slate-300 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="font-bold text-white flex items-center gap-1.5">
+                <Wifi className="w-4 h-4 text-blue-400" />
+                <span>Phone Connection Diagnostics</span>
+              </div>
+              <button
+                onClick={() => setShowPhoneDiag(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-1.5 font-mono text-[11px]">
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-500">Status:</span>
+                <span className={isConnected ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
+                  {isConnected ? 'Paired & Linked' : 'Connecting'}
+                </span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-500">Passcode:</span>
+                <span className="text-amber-400 font-bold">{activePasscode || '---'}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-500">Target Host Peer:</span>
+                <span className="text-slate-300 truncate max-w-[170px]">
+                  {activePasscode ? `wb-smart-${activePasscode.toLowerCase()}` : '---'}
+                </span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-500">Touch Packets Sent:</span>
+                <span className="text-blue-400 font-bold">{txPacketsCount}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-500">Console Logging:</span>
+                <span className="text-emerald-400 font-bold">Active in DevTools</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                onClick={() => {
+                  socket.sendTestPing();
+                  pulseTransmitting();
+                  triggerHaptic(20);
+                }}
+                className="py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold text-center"
+              >
+                Send Test Ping
+              </button>
+              <button
+                onClick={() => {
+                  socket.reconnectWebRTC();
+                  triggerHaptic(20);
+                }}
+                className="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-semibold text-center border border-slate-700"
+              >
+                Reconnect P2P
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowPhoneDiag(false)}
+              className="w-full py-1.5 text-center text-slate-400 hover:text-slate-200 text-[11px]"
+            >
+              Close Diagnostics
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Touch Pressure & Sensitivity Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-5 text-xs text-slate-300 shadow-2xl space-y-4 my-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-blue-600/20 text-blue-400 rounded-lg border border-blue-500/30">
+                  <Gauge className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Pressure & Sensitivity</h3>
+                  <p className="text-[10px] text-slate-400">Control stroke rendering based on touch force</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Toggle Switch */}
+            <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
+              <div>
+                <div className="font-bold text-slate-200 text-xs">Dynamic Pressure Dynamics</div>
+                <div className="text-[10px] text-slate-400">Vary stroke thickness with contact pressure</div>
+              </div>
+              <button
+                onClick={() => {
+                  setPressureEnabled(!pressureEnabled);
+                  triggerHaptic(15);
+                }}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                  pressureEnabled ? 'bg-blue-600' : 'bg-slate-800'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    pressureEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Live Pressure Test Pad & Visualizer */}
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-400 font-medium">Live Touch Pressure Gauge</span>
+                <span className="font-mono font-bold text-blue-400">
+                  {pressureEnabled ? `${Math.round(liveTouchPressure * 100)}% (${liveTouchPressure.toFixed(2)}x)` : 'Disabled (1.0x)'}
+                </span>
+              </div>
+
+              {/* Intensity Bar */}
+              <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-pink-500 rounded-full transition-all duration-75"
+                  style={{
+                    width: `${Math.min(100, (liveTouchPressure / maxStrokeScale) * 100)}%`,
+                  }}
+                />
+              </div>
+
+              {/* Interactive Test Pad */}
+              <div
+                onTouchStart={(e) => {
+                  e.preventDefault();
+                  computeNormalizedPressure(e.touches[0]);
+                  triggerHaptic(10);
+                }}
+                onTouchMove={(e) => {
+                  e.preventDefault();
+                  computeNormalizedPressure(e.touches[0]);
+                }}
+                className="mt-2 py-3 px-3 bg-slate-900 border border-slate-800 rounded-lg text-center cursor-pointer select-none active:bg-slate-800/80 transition-colors"
+              >
+                <span className="text-[11px] text-slate-300 font-medium flex items-center justify-center gap-1.5">
+                  <span>👆 Press or glide finger here to calibrate</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Sensitivity Multiplier Slider */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-[11px]">
+                <label className="text-slate-300 font-medium">Sensitivity Intensity</label>
+                <span className="font-mono text-blue-400 font-bold bg-slate-800 px-1.5 py-0.5 rounded text-[10px]">
+                  {pressureSensitivity.toFixed(1)}x
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0.4"
+                max="2.5"
+                step="0.1"
+                value={pressureSensitivity}
+                disabled={!pressureEnabled}
+                onChange={(e) => setPressureSensitivity(parseFloat(e.target.value))}
+                className="w-full accent-blue-500 cursor-pointer disabled:opacity-40"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>Subtle (0.4x)</span>
+                <span>Balanced (1.2x)</span>
+                <span>Hyper (2.5x)</span>
+              </div>
+            </div>
+
+            {/* Pressure Curve Presets */}
+            <div className="space-y-1.5">
+              <label className="text-slate-300 font-medium text-[11px]">Response Curve</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'linear', label: 'Linear', desc: 'Direct proportional' },
+                  { id: 'ease-in', label: 'Ease-In', desc: 'Soft start' },
+                  { id: 'expressive', label: 'Expressive', desc: 'Calligraphic S-curve' },
+                ].map((curve) => (
+                  <button
+                    key={curve.id}
+                    onClick={() => {
+                      setPressureCurve(curve.id as any);
+                      triggerHaptic(10);
+                    }}
+                    className={`py-2 px-2 rounded-xl border text-center transition-all cursor-pointer ${
+                      pressureCurve === curve.id
+                        ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
+                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    <div className="font-bold text-[11px]">{curve.label}</div>
+                    <div className="text-[9px] opacity-75 truncate">{curve.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Min / Max Stroke Scale Limits */}
+            <div className="grid grid-cols-2 gap-3 pt-1 border-t border-slate-800 text-[11px]">
+              <div>
+                <label className="text-slate-400 block mb-1">Min Stroke Width</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.8"
+                    step="0.1"
+                    value={minStrokeScale}
+                    disabled={!pressureEnabled}
+                    onChange={(e) => setMinStrokeScale(parseFloat(e.target.value))}
+                    className="w-full accent-blue-500"
+                  />
+                  <span className="font-mono text-slate-300 text-[10px] w-8 shrink-0">
+                    {minStrokeScale.toFixed(1)}x
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">Max Stroke Width</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="range"
+                    min="1.2"
+                    max="3.5"
+                    step="0.1"
+                    value={maxStrokeScale}
+                    disabled={!pressureEnabled}
+                    onChange={(e) => setMaxStrokeScale(parseFloat(e.target.value))}
+                    className="w-full accent-blue-500"
+                  />
+                  <span className="font-mono text-slate-300 text-[10px] w-8 shrink-0">
+                    {maxStrokeScale.toFixed(1)}x
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="flex items-center justify-between gap-1 pt-1">
+              <span className="text-[10px] text-slate-400">Presets:</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => {
+                    setPressureSensitivity(0.8);
+                    setPressureCurve('linear');
+                    setMinStrokeScale(0.5);
+                    setMaxStrokeScale(1.8);
+                    triggerHaptic(10);
+                  }}
+                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] cursor-pointer"
+                >
+                  Subtle Note
+                </button>
+                <button
+                  onClick={() => {
+                    setPressureSensitivity(1.2);
+                    setPressureCurve('expressive');
+                    setMinStrokeScale(0.3);
+                    setMaxStrokeScale(2.4);
+                    triggerHaptic(10);
+                  }}
+                  className="px-2 py-1 bg-blue-900/60 hover:bg-blue-800/80 border border-blue-700 text-blue-200 rounded text-[10px] cursor-pointer"
+                >
+                  Calligraphy
+                </button>
+                <button
+                  onClick={() => {
+                    setPressureSensitivity(2.0);
+                    setPressureCurve('ease-in');
+                    setMinStrokeScale(0.2);
+                    setMaxStrokeScale(3.0);
+                    triggerHaptic(10);
+                  }}
+                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] cursor-pointer"
+                >
+                  Heavy Brush
+                </button>
+              </div>
+            </div>
+
+            {/* Done button */}
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer"
+            >
+              Apply Settings
             </button>
           </div>
         </div>

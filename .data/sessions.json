@@ -6,5 +6,24 @@
     "createdAt": 1791749639318,
     "lastActive": 1791749639318,
     "eventBuffer": []
+  },
+  {
+    "sessionId": "sess-abc123",
+    "boardId": "board-algebra-demo",
+    "passcode": "ABC123",
+    "createdAt": 1791751157105,
+    "lastActive": 1791751164146,
+    "eventBuffer": [
+      {
+        "id": "ev-1791751164146-6nx91",
+        "type": "remote:pointer",
+        "payload": {
+          "x": 500,
+          "y": 300,
+          "isDown": true
+        },
+        "timestamp": 1791751164146
+      }
+    ]
   }
 ]

@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface NavbarProps {
   currentView: 'landing' | 'dashboard' | 'whiteboard' | 'remote';
@@ -88,19 +89,21 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onCreat
           </button>
         </nav>
 
-        {/* Zone 3: 1 primary action */}
+        {/* Zone 3: Actions */}
         <div className="flex items-center gap-3 shrink-0">
+          <PWAInstallButton variant="compact" />
+
           {currentView === 'landing' ? (
             <button
               onClick={() => onNavigate('dashboard')}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap shrink-0 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap shrink-0 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none cursor-pointer"
             >
               Open Whiteboard
             </button>
           ) : (
             <button
               onClick={onCreateBoard || (() => onNavigate('dashboard'))}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap shrink-0 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap shrink-0 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none cursor-pointer"
             >
               New Board
             </button>
