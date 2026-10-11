@@ -37,6 +37,7 @@ const ai = new GoogleGenAI({
 // Storage Directory
 const DATA_DIR = process.env.VERCEL ? path.join('/tmp', '.data') : path.join(__dirname, '.data');
 const BOARDS_FILE = path.join(DATA_DIR, 'boards.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 
 try {
   if (!fs.existsSync(DATA_DIR)) {
@@ -224,6 +225,51 @@ interface ActiveRemoteSession {
 }
 
 const remoteSessions = new Map<string, ActiveRemoteSession>();
+
+function loadSessionsFromDisk() {
+  if (fs.existsSync(SESSIONS_FILE)) {
+    try {
+      const raw = fs.readFileSync(SESSIONS_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        list.forEach((s: any) => {
+          if (!remoteSessions.has(s.sessionId)) {
+            remoteSessions.set(s.sessionId, {
+              sessionId: s.sessionId,
+              boardId: s.boardId,
+              passcode: s.passcode,
+              createdAt: s.createdAt || Date.now(),
+              lastActive: s.lastActive || Date.now(),
+              displaySockets: new Set(),
+              controllerSockets: new Set(),
+              eventBuffer: s.eventBuffer || [],
+            });
+          }
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function saveSessionsToDisk() {
+  try {
+    const list = Array.from(remoteSessions.values()).map((s) => ({
+      sessionId: s.sessionId,
+      boardId: s.boardId,
+      passcode: s.passcode,
+      createdAt: s.createdAt,
+      lastActive: s.lastActive,
+      eventBuffer: s.eventBuffer.slice(-80),
+    }));
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch {
+    // ignore
+  }
+}
+
+loadSessionsFromDisk();
 
 // Room Collaboration Map (boardId -> Set<WebSocket>)
 const boardRooms = new Map<string, Set<{ ws: WebSocket; userId: string; userName: string; color: string }>>();
@@ -736,6 +782,8 @@ app.post('/api/remote/sessions', (req, res) => {
     return res.status(400).json({ success: false, error: { message: 'boardId is required' } });
   }
 
+  loadSessionsFromDisk();
+
   // Generate a friendly 6-character alphanumeric pairing passcode
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let passcode = '';
@@ -756,6 +804,7 @@ app.post('/api/remote/sessions', (req, res) => {
   };
 
   remoteSessions.set(sessionId, sessionObj);
+  saveSessionsToDisk();
 
   const publicBaseUrl =
     (process.env.APP_URL || '').replace(/\/$/, '') ||
@@ -782,6 +831,8 @@ app.get('/api/remote/lookup', (req, res) => {
     return res.status(400).json({ success: false, error: { message: 'Code is required' } });
   }
 
+  loadSessionsFromDisk();
+
   for (const session of remoteSessions.values()) {
     if (session.passcode.toUpperCase() === code) {
       return res.json({
@@ -800,6 +851,7 @@ app.get('/api/remote/lookup', (req, res) => {
 
 // 13. Send Remote Controller Event (HTTP fallback in case WebSocket drops)
 app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
+  loadSessionsFromDisk();
   const session = remoteSessions.get(req.params.sessionId);
   if (!session) {
     return res.status(404).json({ success: false, error: { message: 'Session not found' } });
@@ -816,6 +868,7 @@ app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
   session.eventBuffer.push(eventItem);
   if (session.eventBuffer.length > 200) session.eventBuffer.shift();
   session.lastActive = Date.now();
+  saveSessionsToDisk();
 
   // Forward immediately to displays via WebSocket
   const fullMsg = JSON.stringify({ type: eventItem.type, ...eventItem.payload });
@@ -830,6 +883,7 @@ app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
 
 // 14. Poll Remote Controller Events (for display when socket is reconnecting)
 app.get('/api/remote/sessions/:sessionId/events', (req, res) => {
+  loadSessionsFromDisk();
   const session = remoteSessions.get(req.params.sessionId);
   if (!session) {
     return res.status(404).json({ success: false, error: { message: 'Session not found' } });
@@ -843,6 +897,7 @@ app.get('/api/remote/sessions/:sessionId/events', (req, res) => {
 
 // 15. Check Remote Session Status
 app.get('/api/remote/sessions/:sessionId', (req, res) => {
+  loadSessionsFromDisk();
   const session = remoteSessions.get(req.params.sessionId);
   if (!session) {
     return res.status(404).json({ success: false, error: { message: 'Remote session not found or expired' } });
@@ -854,7 +909,7 @@ app.get('/api/remote/sessions/:sessionId', (req, res) => {
       sessionId: session.sessionId,
       boardId: session.boardId,
       passcode: session.passcode,
-      connectedControllers: session.controllerSockets.size,
+      connectedControllers: Math.max(session.controllerSockets.size, session.eventBuffer.length > 0 ? 1 : 0),
       connectedDisplays: session.displaySockets.size,
     },
   });

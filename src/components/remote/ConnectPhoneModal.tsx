@@ -49,8 +49,10 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
         // Bind laptop as display socket
         socket.bindRemote(session.sessionId, 'display');
 
-        // Use public URL so phone camera scanning reaches the live internet app
-        const fullUrl = session.publicUrl || `${window.location.origin}${session.url}`;
+        // Always prioritize the live browser origin (so phone connects to the exact same deployment/Vercel URL)
+        const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+        const fullUrl = `${currentOrigin}${session.url}`;
+
         const qrUrl = await QRCode.toDataURL(fullUrl, {
           width: 240,
           margin: 1.5,
@@ -75,7 +77,7 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
           } catch {
             // ignore
           }
-        }, 2000);
+        }, 1500);
 
         return () => clearInterval(pollInterval);
       })
@@ -102,11 +104,13 @@ export const ConnectPhoneModal: React.FC<ConnectPhoneModalProps> = ({
 
   if (!isOpen) return null;
 
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const fullPairingUrl = sessionData
-    ? (sessionData.publicUrl || `${window.location.origin}${sessionData.url}`)
+    ? `${currentOrigin}${sessionData.url}`
     : '';
 
   const handleCopyLink = () => {
+    if (!fullPairingUrl) return;
     navigator.clipboard.writeText(fullPairingUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
