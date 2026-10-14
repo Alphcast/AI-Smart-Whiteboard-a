@@ -4,20 +4,20 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api?__path=$1"
+    },
+    {
       "source": "/api",
       "destination": "/api"
     },
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
+      "source": "/socket.io/(.*)",
+      "destination": "/api?__path=socket.io/$1"
     },
     {
       "source": "/socket.io",
-      "destination": "/api"
-    },
-    {
-      "source": "/socket.io/(.*)",
-      "destination": "/api"
+      "destination": "/api?__path=socket.io"
     },
     {
       "source": "/((?!api|socket\\.io).*)",

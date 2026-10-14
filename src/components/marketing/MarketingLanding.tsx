@@ -26,11 +26,15 @@ import { solveEquationLocally } from '../../utils/mathSolver';
 interface MarketingLandingProps {
   onStartWhiteboard: () => void;
   onExploreTemplates: () => void;
+  onNavigateLessons?: () => void;
+  onNavigateNotes?: () => void;
 }
 
 export const MarketingLanding: React.FC<MarketingLandingProps> = ({
   onStartWhiteboard,
   onExploreTemplates,
+  onNavigateLessons,
+  onNavigateNotes,
 }) => {
   // Interactive Math Demo on Landing Page
   const [demoInput, setDemoInput] = useState('2x + 5 = 15');
@@ -45,33 +49,46 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
           <div className="lg:col-span-6 space-y-6">
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-50 border border-blue-200/80 rounded-full text-xs font-semibold text-blue-700">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>Next-Generation Digital Learning Surface</span>
+              <span>Real-Time Collaborative Teaching & Whiteboard Surface</span>
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 leading-[1.1] text-balance">
-              Write. Think. Solve. Create.
+              Collaborative Teaching Workspace for Online Lessons
             </h1>
 
             <p className="text-lg text-slate-600 max-w-xl leading-relaxed">
-              A smarter digital whiteboard designed for handwritten mathematics, step-by-step AI problem solving,
-              interactive teaching, and wireless smartphone remote touchpad control.
+              Connect teachers and students on a shared smart whiteboard with real-time cursor tracking,
+              granular editing permissions, private student notebooks, step-by-step AI mathematics solving, and smartphone remote controls.
             </p>
 
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
               <button
-                onClick={onStartWhiteboard}
-                className="flex items-center justify-center gap-2 px-6 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-blue-500/25 transition-all hover:shadow-lg focus-visible:ring-2 focus-visible:ring-blue-500"
+                onClick={onNavigateLessons || onStartWhiteboard}
+                className="flex items-center justify-center gap-2 px-6 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-blue-500/25 transition-all hover:shadow-lg focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer"
               >
-                <span>Create a Whiteboard</span>
-                <ArrowRight className="w-4 h-4" />
+                <BookOpen className="w-4 h-4" />
+                <span>Open Live Lessons</span>
+                <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-blue-500 text-white">
+                  Live
+                </span>
               </button>
 
               <button
-                onClick={onExploreTemplates}
-                className="flex items-center justify-center gap-2 px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition-colors"
+                onClick={onStartWhiteboard}
+                className="flex items-center justify-center gap-2 px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
               >
-                <span>Browse Templates</span>
+                <span>My Whiteboards</span>
+                <ArrowRight className="w-4 h-4 text-slate-500" />
               </button>
+
+              {onNavigateNotes && (
+                <button
+                  onClick={onNavigateNotes}
+                  className="flex items-center justify-center gap-2 px-5 py-3.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/70 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  <span>Student Notes</span>
+                </button>
+              )}
             </div>
 
             <div className="pt-4 flex items-center gap-6 text-xs text-slate-500">
@@ -170,6 +187,139 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
                   <span className="font-medium text-blue-600">Saved to Cloud ✓</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Feature Showcase: Real-Time Collaborative Teaching Workspace */}
+      <section className="py-16 bg-gradient-to-b from-blue-50/40 via-white to-slate-50 border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center max-w-3xl mx-auto space-y-3 mb-12">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100/80 text-blue-800 rounded-full text-xs font-semibold">
+              <BookOpen className="w-3.5 h-3.5 text-blue-700" />
+              <span>Real-Time Collaborative Teaching Workspace</span>
+            </div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900">
+              Transform Your Smart Whiteboard into a Live Classroom
+            </h2>
+            <p className="text-sm sm:text-base text-slate-600">
+              Synchronize teacher instruction and student interaction in real time. Organize lessons by subject and calendar date,
+              grant granular editing permissions, and let students keep private lecture notes.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Card 1: Live Collaborative Whiteboard */}
+            <div className="bg-white rounded-2xl border border-blue-200/80 p-6 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <Users className="w-5 h-5 text-blue-600" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-base text-slate-900">Live Board Collaboration</h3>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-800">
+                    Real-Time
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Teachers and students share the same active whiteboard canvas. Teachers can switch collaboration modes between
+                  <strong className="text-slate-800 font-semibold"> Everyone Can Edit</strong> and
+                  <strong className="text-slate-800 font-semibold"> Teacher-Only</strong> with one tap without losing board content.
+                </p>
+                <div className="pt-2 space-y-1.5 text-xs text-slate-700">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Real-time participant presence and live colored cursors</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Per-student granular edit authorization controls</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={onNavigateLessons || onStartWhiteboard}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                <span>Launch Live Lessons Hub</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Card 2: Student Notebooks */}
+            <div className="bg-white rounded-2xl border border-amber-200/80 p-6 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <FileText className="w-5 h-5 text-amber-700" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-base text-slate-900">Private Student Notebook</h3>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800">
+                    Personalized
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Every student maintains private, editable lesson notes attached to active whiteboard sessions.
+                  Notes automatically save locally and in the cloud with revision histories.
+                </p>
+                <div className="pt-2 space-y-1.5 text-xs text-slate-700">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Key takeaways and mathematical working memory</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Organized by subject, topic, and lecture date</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={onNavigateNotes || onStartWhiteboard}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                <span>Open Student Notebook</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Card 3: Curriculum & AI Summaries */}
+            <div className="bg-white rounded-2xl border border-purple-200/80 p-6 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
+                  <Sparkles className="w-5 h-5 text-purple-600" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-base text-slate-900">Curriculum & AI Summaries</h3>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-purple-100 text-purple-800">
+                    Smart AI
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Structure classes with distinct subjects, learning objectives, and calendar scheduling.
+                  One-click AI summarizes whiteboard equations and generates revision questions.
+                </p>
+                <div className="pt-2 space-y-1.5 text-xs text-slate-700">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Custom subjects with tags, colors, and icons</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Instant step-by-step math solver & Katex rendering</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={onNavigateLessons || onStartWhiteboard}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                <span>Browse Lessons Catalog</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         </div>

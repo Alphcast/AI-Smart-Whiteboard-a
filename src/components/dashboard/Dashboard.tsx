@@ -23,6 +23,8 @@ import {
   Download,
   FileImage,
   FileCode,
+  FileText,
+  Users,
 } from 'lucide-react';
 import { Whiteboard } from '../../types/whiteboard';
 import { api } from '../../services/api';
@@ -139,29 +141,93 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {onNavigateLessons && (
+              <button
+                onClick={onNavigateLessons}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
+                title="Enter Live Collaborative Lessons"
+              >
+                <BookOpen className="w-4 h-4 text-blue-600" />
+                <span>Live Lessons</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              </button>
+            )}
+
+            {onNavigateNotes && (
+              <button
+                onClick={onNavigateNotes}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
+                title="Open Student Notes & Notebooks"
+              >
+                <FileText className="w-4 h-4 text-amber-600" />
+                <span>Student Notes</span>
+              </button>
+            )}
+
             {onNavigateRemote && (
               <button
                 onClick={onNavigateRemote}
-                className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition-colors"
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
                 title="Connect phone touchpad remote controller"
               >
                 <Radio className="w-4 h-4 text-blue-600" />
                 <span>Phone Controller</span>
               </button>
             )}
+
             <button
               onClick={onCreateNewBoard}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-all shadow-blue-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-all shadow-blue-500/20 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>Create Whiteboard</span>
+              <span>New Board</span>
             </button>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8 flex-1 w-full space-y-8">
+        {/* Collaborative Teaching Hub Quick Banner */}
+        {filterTab !== 'trash' && onNavigateLessons && (
+          <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 rounded-2xl p-6 text-white shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-1.5 max-w-2xl">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/20 text-white text-xs font-semibold backdrop-blur-xs">
+                <Users className="w-3.5 h-3.5 text-blue-100" />
+                <span>Real-Time Teaching Classroom</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+                Online Classroom & Live Collaboration
+              </h2>
+              <p className="text-xs sm:text-sm text-blue-100 leading-relaxed">
+                Start an interactive teaching session with synchronized whiteboard drawing, participant permissions,
+                and private student revision notes.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <button
+                onClick={onNavigateLessons}
+                className="flex items-center gap-2 px-5 py-2.5 bg-white hover:bg-blue-50 text-blue-700 rounded-xl text-sm font-bold shadow-md transition-all cursor-pointer"
+              >
+                <BookOpen className="w-4 h-4 text-blue-600" />
+                <span>Enter Live Lessons Hub</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              {onNavigateNotes && (
+                <button
+                  onClick={onNavigateNotes}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-500/30 hover:bg-blue-500/40 text-white border border-white/25 rounded-xl text-sm font-medium transition-colors cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-amber-200" />
+                  <span>Student Notes</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Templates Banner */}
         {filterTab !== 'trash' && (
           <div>

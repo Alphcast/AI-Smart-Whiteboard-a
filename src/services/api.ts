@@ -15,6 +15,9 @@ import {
 } from './offlineSync';
 
 const STORAGE_KEY = 'ai_whiteboard_offline_boards';
+const STORAGE_KEY_LESSONS = 'ai_whiteboard_offline_lessons';
+const STORAGE_KEY_NOTES = 'ai_whiteboard_offline_notes';
+const STORAGE_KEY_SUBJECTS = 'ai_whiteboard_offline_subjects';
 
 function getStoredLocalBoards(): Whiteboard[] {
   if (typeof window === 'undefined') return [];
@@ -34,6 +37,216 @@ function saveStoredLocalBoards(boards: Whiteboard[]) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(boards));
+  } catch {
+    // ignore
+  }
+}
+
+function getStoredLocalSubjects(): SubjectItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SUBJECTS);
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch {
+    // ignore
+  }
+  const defaults: SubjectItem[] = [
+    { id: 'subj-math', name: 'Mathematics', color: '#2563eb', icon: '📐' },
+    { id: 'subj-physics', name: 'Physics', color: '#7c3aed', icon: '⚡' },
+    { id: 'subj-chem', name: 'Chemistry', color: '#db2777', icon: '🧪' },
+    { id: 'subj-bio', name: 'Biology', color: '#059669', icon: '🧬' },
+    { id: 'subj-cs', name: 'Computer Science', color: '#0891b2', icon: '💻' },
+    { id: 'subj-lit', name: 'Literature & Writing', color: '#d97706', icon: '📖' },
+    { id: 'subj-history', name: 'History & Social Studies', color: '#4f46e5', icon: '🏛️' },
+    { id: 'subj-art', name: 'Art & Geometry Design', color: '#e11d48', icon: '🎨' },
+  ];
+  saveStoredLocalSubjects(defaults);
+  return defaults;
+}
+
+function saveStoredLocalSubjects(subjects: SubjectItem[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY_SUBJECTS, JSON.stringify(subjects));
+  } catch {
+    // ignore
+  }
+}
+
+function getStoredLocalLessons(): Lesson[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_LESSONS);
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch {
+    // ignore
+  }
+  const today = new Date().toISOString().split('T')[0];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const defaults: Lesson[] = [
+    {
+      id: 'lesson-algebra-masterclass',
+      boardId: 'board-algebra-demo',
+      subject: 'Mathematics',
+      topic: 'Algebra & Quadratic Systems Masterclass',
+      description: 'Factoring quadratic equations, step-by-step graphical reasoning, and linear balancing.',
+      learningObjectives: [
+        'Master factoring of standard quadratic equations ax² + bx + c = 0',
+        'Extract real roots and explain mathematical steps clearly',
+        'Model equations visually on the collaborative whiteboard',
+      ],
+      lessonDate: today,
+      scheduledAt: new Date().toISOString(),
+      status: 'active',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'everyone_can_edit',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      summary: 'Students analyzed quadratic formulas and factor decomposition, verifying roots algebraically.',
+      revisionQuestions: [
+        'How does the discriminant b² - 4ac determine the nature of quadratic roots?',
+        'What is the first step in factoring x² - 5x + 6 = 0?',
+        'How do you check solutions on a Cartesian coordinate plane?',
+      ],
+    },
+    {
+      id: 'lesson-physics-equilibrium',
+      boardId: 'board-geometry-demo',
+      subject: 'Physics',
+      topic: 'Newtonian Vectors & Statics Equilibrium',
+      description: 'Resolution of concurrent forces, inclined plane friction, and free-body diagrams.',
+      learningObjectives: [
+        'Construct free-body diagrams for inclined plane problems',
+        'Resolve force vectors into orthogonal components',
+        'Apply ΣF = 0 conditions for static equilibrium',
+      ],
+      lessonDate: tomorrow,
+      scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+      status: 'scheduled',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'teacher_only',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'lesson-chem-stoichiometry',
+      boardId: 'board-empty-clean',
+      subject: 'Chemistry',
+      topic: 'Chemical Reactions & Stoichiometric Balancing',
+      description: 'Balancing oxidation-reduction equations, molar mass conversions, and reagent yields.',
+      learningObjectives: [
+        'Balance non-trivial redox equations using half-reaction method',
+        'Calculate theoretical yield and limiting reactants',
+      ],
+      lessonDate: today,
+      scheduledAt: new Date(Date.now() - 3600000).toISOString(),
+      status: 'completed',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'students_view_only',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      summary: 'Covered oxidation numbers, half-reaction balancing in acidic solution, and molar conversion steps.',
+    },
+  ];
+  saveStoredLocalLessons(defaults);
+  return defaults;
+}
+
+function saveStoredLocalLessons(lessons: Lesson[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY_LESSONS, JSON.stringify(lessons));
+  } catch {
+    // ignore
+  }
+}
+
+function getStoredLocalNotes(): StudentNote[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_NOTES);
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch {
+    // ignore
+  }
+  const today = new Date().toISOString().split('T')[0];
+  const defaults: StudentNote[] = [
+    {
+      id: 'note-algebra-quadratics',
+      lessonId: 'lesson-algebra-masterclass',
+      studentId: 'student-demo',
+      studentName: 'Alex Student',
+      subject: 'Mathematics',
+      topic: 'Algebra & Quadratic Systems Masterclass',
+      lessonDate: today,
+      title: 'Quadratic Factoring & Discriminant Method',
+      content: `### Quadratic Equation Notes
+
+Standard formula: $ax^2 + bx + c = 0$
+For $x^2 - 5x + 6 = 0$:
+1. $a = 1, b = -5, c = 6$
+2. Discriminant: $\\Delta = (-5)^2 - 4(1)(6) = 25 - 24 = 1$
+3. Since $\\Delta > 0$, two distinct real roots exist:
+   $x = \\frac{5 \\pm 1}{2} \\implies x = 3 \\text{ or } x = 2$
+
+**Teacher tip:** Quick binomial factorization $(x-2)(x-3)=0$ is faster when product = 6 and sum = -5.`,
+      keyTakeaways: [
+        'Discriminant > 0 means two real solutions',
+        'Always check roots by substituting back into original formula',
+        'Factoring works best when coefficients are integers',
+      ],
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'note-physics-vectors',
+      lessonId: 'lesson-physics-equilibrium',
+      studentId: 'student-demo',
+      studentName: 'Alex Student',
+      subject: 'Physics',
+      topic: 'Newtonian Vectors & Statics Equilibrium',
+      lessonDate: today,
+      title: 'Free Body Diagrams & Vector Resolution',
+      content: `### Static Equilibrium Conditions
+
+1. $\\sum F_x = 0$
+2. $\\sum F_y = 0$
+3. $\\sum \\tau = 0$
+
+On inclined planes with angle $\\theta$:
+- Normal force: $N = mg \\cos(\\theta)$
+- Downward slope force: $F_{\\parallel} = mg \\sin(\\theta)$
+- Friction: $f_s \\le \\mu_s N$`,
+      keyTakeaways: [
+        'Decompose force vectors parallel and perpendicular to slope',
+        'Normal force is perpendicular to inclined plane surface',
+      ],
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+  saveStoredLocalNotes(defaults);
+  return defaults;
+}
+
+function saveStoredLocalNotes(notes: StudentNote[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(notes));
   } catch {
     // ignore
   }
@@ -448,27 +661,28 @@ export const api = {
       const res = await fetch('/api/subjects');
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && Array.isArray(json.data)) return json.data;
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          saveStoredLocalSubjects(json.data);
+          return json.data;
+        }
       }
     } catch {
       // offline fallback
     }
-    return [
-      { id: 'subj-math', name: 'Mathematics', color: '#2563eb', icon: '📐' },
-      { id: 'subj-physics', name: 'Physics', color: '#7c3aed', icon: '⚡' },
-      { id: 'subj-chem', name: 'Chemistry', color: '#db2777', icon: '🧪' },
-      { id: 'subj-bio', name: 'Biology', color: '#059669', icon: '🧬' },
-      { id: 'subj-cs', name: 'Computer Science', color: '#0891b2', icon: '💻' },
-      { id: 'subj-lit', name: 'Literature & Writing', color: '#d97706', icon: '📖' },
-      { id: 'subj-history', name: 'History & Social Studies', color: '#4f46e5', icon: '🏛️' },
-      { id: 'subj-art', name: 'Art & Geometry Design', color: '#e11d48', icon: '🎨' },
-    ];
+    return getStoredLocalSubjects();
   },
 
   async createSubject(nameOrObj: string | { name: string; color?: string; icon?: string }, color?: string, icon?: string): Promise<SubjectItem> {
     const name = typeof nameOrObj === 'object' ? nameOrObj.name : nameOrObj;
     const finalColor = typeof nameOrObj === 'object' ? nameOrObj.color || color : color;
     const finalIcon = typeof nameOrObj === 'object' ? nameOrObj.icon || icon : icon;
+    let newSubject: SubjectItem = {
+      id: `subj-${Date.now()}`,
+      name,
+      color: finalColor || '#2563eb',
+      icon: finalIcon || '📚',
+    };
+
     try {
       const res = await fetch('/api/subjects', {
         method: 'POST',
@@ -477,17 +691,19 @@ export const api = {
       });
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
+        if (json.success && json.data) {
+          newSubject = json.data;
+        }
       }
     } catch {
-      // ignore
+      // offline
     }
-    return {
-      id: `subj-${Date.now()}`,
-      name,
-      color: finalColor || '#2563eb',
-      icon: finalIcon || '📚',
-    };
+
+    const current = getStoredLocalSubjects();
+    if (!current.some((s) => s.id === newSubject.id)) {
+      saveStoredLocalSubjects([...current, newSubject]);
+    }
+    return newSubject;
   },
 
   // ================= LESSONS =================
@@ -510,34 +726,41 @@ export const api = {
       const res = await fetch(`/api/lessons${qs}`);
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && Array.isArray(json.data)) return json.data;
+        if (json.success && Array.isArray(json.data)) {
+          // If unfiltered fetch, update local cache
+          if (!filters || Object.keys(filters).length === 0) {
+            saveStoredLocalLessons(json.data);
+          }
+          return json.data;
+        }
       }
     } catch {
       // offline fallback
     }
 
-    return [
-      {
-        id: 'lesson-algebra-masterclass',
-        boardId: 'board-algebra-demo',
-        subject: 'Mathematics',
-        topic: 'Algebra & Quadratic Systems Masterclass',
-        description: 'Interactive step-by-step factoring, zero-product property, and live board collaboration.',
-        learningObjectives: [
-          'Identify standard quadratic form ax² + bx + c = 0',
-          'Solve by factoring into binomials',
-          'Verify solutions through direct substitution',
-        ],
-        lessonDate: new Date().toISOString().split('T')[0],
-        scheduledAt: new Date().toISOString(),
-        status: 'active',
-        teacherId: 'teacher-primary',
-        teacherName: 'Prof. Clarke',
-        collaborationMode: 'everyone_can_edit',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    ];
+    let list = getStoredLocalLessons();
+    if (filters?.subject && filters.subject !== 'all') {
+      list = list.filter((l) => l.subject.toLowerCase() === filters.subject!.toLowerCase());
+    }
+    if (filters?.status && filters.status !== 'all') {
+      list = list.filter((l) => l.status === filters.status);
+    }
+    if (filters?.search) {
+      const q = filters.search.toLowerCase();
+      list = list.filter(
+        (l) =>
+          l.topic.toLowerCase().includes(q) ||
+          (l.description && l.description.toLowerCase().includes(q)) ||
+          l.subject.toLowerCase().includes(q)
+      );
+    }
+    if (filters?.date) {
+      list = list.filter((l) => l.lessonDate === filters.date);
+    }
+    if (filters?.boardId) {
+      list = list.filter((l) => l.boardId === filters.boardId);
+    }
+    return list;
   },
 
   async getLesson(id: string): Promise<Lesson & { participants?: LessonParticipant[]; board?: Whiteboard }> {
@@ -551,7 +774,18 @@ export const api = {
       // fallback
     }
 
-    const fallbackBoard = await this.getBoard(id);
+    const localLessons = getStoredLocalLessons();
+    const existing = localLessons.find((l) => l.id === id || l.boardId === id);
+    const fallbackBoard = existing?.boardId ? await this.getBoard(existing.boardId) : await this.getBoard(id);
+
+    if (existing) {
+      return {
+        ...existing,
+        board: fallbackBoard,
+        participants: [],
+      };
+    }
+
     return {
       id: `lesson-${id}`,
       boardId: id,
@@ -583,6 +817,7 @@ export const api = {
     collaborationMode?: CollaborationMode;
     boardId?: string;
   }): Promise<Lesson> {
+    let createdLesson: Lesson | null = null;
     try {
       const res = await fetch('/api/lessons', {
         method: 'POST',
@@ -591,32 +826,41 @@ export const api = {
       });
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
+        if (json.success && json.data) {
+          createdLesson = json.data;
+        }
       }
     } catch {
       // offline fallback
     }
 
-    const fallbackBoard = await this.createBoard(data.topic);
-    return {
-      id: `lesson-${Date.now()}`,
-      boardId: data.boardId || fallbackBoard.id,
-      subject: data.subject || 'Mathematics',
-      topic: data.topic,
-      description: data.description,
-      learningObjectives: data.learningObjectives || [],
-      lessonDate: data.lessonDate || new Date().toISOString().split('T')[0],
-      scheduledAt: data.scheduledAt || new Date().toISOString(),
-      status: data.status || 'active',
-      teacherId: 'teacher-primary',
-      teacherName: 'Prof. Clarke',
-      collaborationMode: data.collaborationMode || 'everyone_can_edit',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    if (!createdLesson) {
+      const fallbackBoard = data.boardId ? await this.getBoard(data.boardId) : await this.createBoard(data.topic);
+      createdLesson = {
+        id: `lesson-${Date.now()}`,
+        boardId: data.boardId || fallbackBoard.id,
+        subject: data.subject || 'Mathematics',
+        topic: data.topic,
+        description: data.description,
+        learningObjectives: data.learningObjectives || [],
+        lessonDate: data.lessonDate || new Date().toISOString().split('T')[0],
+        scheduledAt: data.scheduledAt || new Date().toISOString(),
+        status: data.status || 'active',
+        teacherId: 'teacher-primary',
+        teacherName: 'Prof. Clarke',
+        collaborationMode: data.collaborationMode || 'everyone_can_edit',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const currentLessons = getStoredLocalLessons();
+    saveStoredLocalLessons([createdLesson, ...currentLessons.filter((l) => l.id !== createdLesson!.id)]);
+    return createdLesson;
   },
 
   async updateLesson(id: string, updates: Partial<Lesson>): Promise<Lesson> {
+    let updatedLesson: Lesson | null = null;
     try {
       const res = await fetch(`/api/lessons/${encodeURIComponent(id)}`, {
         method: 'PUT',
@@ -625,13 +869,22 @@ export const api = {
       });
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
+        if (json.success && json.data) {
+          updatedLesson = json.data;
+        }
       }
     } catch {
       // fallback
     }
-    const current = await this.getLesson(id);
-    return { ...current, ...updates, updatedAt: new Date().toISOString() };
+
+    if (!updatedLesson) {
+      const current = await this.getLesson(id);
+      updatedLesson = { ...current, ...updates, updatedAt: new Date().toISOString() };
+    }
+
+    const all = getStoredLocalLessons();
+    saveStoredLocalLessons(all.map((l) => (l.id === id ? { ...l, ...updatedLesson } : l)));
+    return updatedLesson;
   },
 
   async updateLessonPermissions(
@@ -656,6 +909,16 @@ export const api = {
     } catch {
       // fallback
     }
+
+    const all = getStoredLocalLessons();
+    saveStoredLocalLessons(
+      all.map((l) =>
+        l.id === id
+          ? { ...l, collaborationMode, studentPermissions: studentPermissions || l.studentPermissions }
+          : l
+      )
+    );
+
     return {
       collaborationMode,
       studentPermissions: studentPermissions || {},
@@ -671,6 +934,8 @@ export const api = {
     } catch {
       // fallback
     }
+    const current = getStoredLocalLessons();
+    saveStoredLocalLessons(current.filter((l) => l.id !== id));
   },
 
   // ================= STUDENT NOTES =================
@@ -695,14 +960,9 @@ export const api = {
       // fallback to localStorage
     }
 
-    try {
-      const key = `student_note_${lessonId}_${studentId}`;
-      const saved = localStorage.getItem(key);
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // ignore
-    }
-    return null;
+    const allNotes = getStoredLocalNotes();
+    const found = allNotes.find((n) => n.lessonId === lessonId && n.studentId === studentId);
+    return found || null;
   },
 
   async saveStudentNote(
@@ -717,6 +977,7 @@ export const api = {
     }
   ): Promise<StudentNote> {
     const activeStudentId = data.studentId || 'student-demo';
+    let savedNote: StudentNote | null = null;
 
     try {
       const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes`, {
@@ -731,13 +992,7 @@ export const api = {
       if (res.ok) {
         const json = await safeJson(res);
         if (json.success && json.data) {
-          try {
-            const key = `student_note_${lessonId}_${activeStudentId}`;
-            localStorage.setItem(key, JSON.stringify(json.data));
-          } catch {
-            // ignore
-          }
-          return json.data;
+          savedNote = json.data;
         }
       } else if (res.status === 409) {
         const conflictJson = await safeJson(res);
@@ -756,30 +1011,31 @@ export const api = {
       // offline fallback
     }
 
-    const fallbackNote: StudentNote = {
-      id: `note-${Date.now()}`,
-      lessonId,
-      studentId: activeStudentId,
-      studentName: data.studentName || 'Alex Student',
-      subject: 'Mathematics',
-      topic: 'Lesson Notes',
-      lessonDate: new Date().toISOString().split('T')[0],
-      title: data.title || 'My Lesson Notes',
-      content: data.content,
-      keyTakeaways: data.keyTakeaways || [],
-      version: (data.version || 1) + 1,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    try {
-      const key = `student_note_${lessonId}_${fallbackNote.studentId}`;
-      localStorage.setItem(key, JSON.stringify(fallbackNote));
-    } catch {
-      // ignore
+    if (!savedNote) {
+      const localLessons = getStoredLocalLessons();
+      const parentLesson = localLessons.find((l) => l.id === lessonId);
+      savedNote = {
+        id: `note-${Date.now()}`,
+        lessonId,
+        studentId: activeStudentId,
+        studentName: data.studentName || 'Alex Student',
+        subject: parentLesson?.subject || 'Mathematics',
+        topic: parentLesson?.topic || 'Lesson Notes',
+        lessonDate: parentLesson?.lessonDate || new Date().toISOString().split('T')[0],
+        title: data.title || 'My Lesson Notes',
+        content: data.content,
+        keyTakeaways: data.keyTakeaways || [],
+        version: (data.version || 1) + 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     }
 
-    return fallbackNote;
+    const currentNotes = getStoredLocalNotes();
+    const filtered = currentNotes.filter((n) => n.id !== savedNote!.id && !(n.lessonId === lessonId && n.studentId === activeStudentId));
+    saveStoredLocalNotes([savedNote, ...filtered]);
+
+    return savedNote;
   },
 
   async getStudentAllNotes(studentId = 'student-demo'): Promise<StudentNote[]> {
@@ -791,12 +1047,17 @@ export const api = {
       });
       if (res.ok) {
         const json = await safeJson(res);
-        if (json.success && Array.isArray(json.data)) return json.data;
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          saveStoredLocalNotes(json.data);
+          return json.data;
+        }
       }
     } catch {
       // ignore
     }
-    return [];
+
+    const all = getStoredLocalNotes();
+    return all.filter((n) => !studentId || n.studentId === studentId);
   },
 
   async deleteStudentNote(lessonId: string, noteId: string, studentId = 'student-demo'): Promise<void> {
@@ -810,6 +1071,8 @@ export const api = {
     } catch {
       // fallback
     }
+    const current = getStoredLocalNotes();
+    saveStoredLocalNotes(current.filter((n) => n.id !== noteId));
   },
 
   async generateLessonAISummary(lessonId: string): Promise<{

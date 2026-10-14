@@ -47,12 +47,35 @@ app.use((req, res, next) => {
 
 // 2. Vercel Serverless Rewrites Path Normalizer
 app.use((req, res, next) => {
-  const matchedPath =
-    req.headers['x-matched-path'] ||
-    req.headers['x-now-route-matches'] ||
-    req.headers['x-invoke-path'];
-  if (matchedPath && typeof matchedPath === 'string' && (req.url === '/api' || req.url === '/api/' || req.url === '/')) {
-    req.url = matchedPath;
+  if (req.query && req.query.__path) {
+    const rawPath = Array.isArray(req.query.__path)
+      ? req.query.__path.join('/')
+      : req.query.__path;
+    const cleanPath = String(rawPath).startsWith('/') ? String(rawPath) : `/${rawPath}`;
+
+    const urlParts = req.url.split('?');
+    let search = '';
+    if (urlParts.length > 1) {
+      const params = new URLSearchParams(urlParts[1]);
+      params.delete('__path');
+      const qs = params.toString();
+      if (qs) search = `?${qs}`;
+    }
+
+    if (cleanPath.startsWith('/socket.io')) {
+      req.url = `${cleanPath}${search}`;
+    } else {
+      req.url = `/api${cleanPath}${search}`;
+    }
+  } else {
+    const matchedPath =
+      req.headers['x-matched-path'] ||
+      req.headers['x-vercel-matched-path'] ||
+      req.headers['x-now-route-matches'] ||
+      req.headers['x-invoke-path'];
+    if (matchedPath && typeof matchedPath === 'string' && (matchedPath.startsWith('/api/') || matchedPath.startsWith('/socket.io/'))) {
+      req.url = matchedPath;
+    }
   }
   next();
 });

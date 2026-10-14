@@ -133,6 +133,8 @@ export default function App() {
         <MarketingLanding
           onStartWhiteboard={() => handleNavigate('dashboard')}
           onExploreTemplates={() => handleNavigate('dashboard')}
+          onNavigateLessons={() => handleNavigate('lessons')}
+          onNavigateNotes={() => handleNavigate('notes')}
         />
       )}
 
