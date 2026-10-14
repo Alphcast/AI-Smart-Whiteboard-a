@@ -37,6 +37,7 @@ interface WhiteboardToolbarProps {
   onClear: () => void;
   onRecognizeEquation?: () => void;
   onExport?: () => void;
+  readOnly?: boolean;
 }
 
 export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
@@ -49,6 +50,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   onClear,
   onRecognizeEquation,
   onExport,
+  readOnly = false,
 }) => {
   const [shapesMenuOpen, setShapesMenuOpen] = useState(false);
 

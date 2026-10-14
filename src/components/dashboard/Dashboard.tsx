@@ -29,10 +29,12 @@ import { api } from '../../services/api';
 import { exportToPNG, exportToSVG } from '../../utils/export';
 
 interface DashboardProps {
-  onOpenBoard: (id: string) => void;
+  onOpenBoard: (id: string, lessonId?: string) => void;
   onCreateNewBoard: () => void;
   onNavigateHome: () => void;
   onNavigateRemote?: () => void;
+  onNavigateLessons?: () => void;
+  onNavigateNotes?: () => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -40,6 +42,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onCreateNewBoard,
   onNavigateHome,
   onNavigateRemote,
+  onNavigateLessons,
+  onNavigateNotes,
 }) => {
   const [boards, setBoards] = useState<Whiteboard[]>([]);
   const [loading, setLoading] = useState(true);

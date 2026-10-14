@@ -4,6 +4,7 @@
  */
 
 import { Whiteboard, MathSolution } from '../types/whiteboard';
+import { Lesson, StudentNote, SubjectItem, CollaborationMode, LessonParticipant } from '../types/lesson';
 import { solveEquationLocally } from '../utils/mathSolver';
 import {
   cacheActiveBoardSnapshot,
@@ -438,6 +439,364 @@ export const api = {
     return {
       explanation: `To solve "${expression}", perform inverse operations symmetrically on both sides of the equals sign. This maintains balance throughout step-by-step mathematical reasoning.${solution ? ` The final verified solution is ${solution}.` : ''}`,
       level,
+    };
+  },
+
+  // ================= SUBJECTS =================
+  async getSubjects(): Promise<SubjectItem[]> {
+    try {
+      const res = await fetch('/api/subjects');
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && Array.isArray(json.data)) return json.data;
+      }
+    } catch {
+      // offline fallback
+    }
+    return [
+      { id: 'subj-math', name: 'Mathematics', color: '#2563eb', icon: '📐' },
+      { id: 'subj-physics', name: 'Physics', color: '#7c3aed', icon: '⚡' },
+      { id: 'subj-chem', name: 'Chemistry', color: '#db2777', icon: '🧪' },
+      { id: 'subj-bio', name: 'Biology', color: '#059669', icon: '🧬' },
+      { id: 'subj-cs', name: 'Computer Science', color: '#0891b2', icon: '💻' },
+      { id: 'subj-lit', name: 'Literature & Writing', color: '#d97706', icon: '📖' },
+      { id: 'subj-history', name: 'History & Social Studies', color: '#4f46e5', icon: '🏛️' },
+      { id: 'subj-art', name: 'Art & Geometry Design', color: '#e11d48', icon: '🎨' },
+    ];
+  },
+
+  async createSubject(name: string, color?: string, icon?: string): Promise<SubjectItem> {
+    try {
+      const res = await fetch('/api/subjects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color, icon }),
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // ignore
+    }
+    return {
+      id: `subj-${Date.now()}`,
+      name,
+      color: color || '#2563eb',
+      icon: icon || '📚',
+    };
+  },
+
+  // ================= LESSONS =================
+  async getLessons(filters?: {
+    subject?: string;
+    status?: string;
+    search?: string;
+    date?: string;
+    boardId?: string;
+  }): Promise<Lesson[]> {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.subject) params.set('subject', filters.subject);
+      if (filters?.status) params.set('status', filters.status);
+      if (filters?.search) params.set('search', filters.search);
+      if (filters?.date) params.set('date', filters.date);
+      if (filters?.boardId) params.set('boardId', filters.boardId);
+
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`/api/lessons${qs}`);
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && Array.isArray(json.data)) return json.data;
+      }
+    } catch {
+      // offline fallback
+    }
+
+    return [
+      {
+        id: 'lesson-algebra-masterclass',
+        boardId: 'board-algebra-demo',
+        subject: 'Mathematics',
+        topic: 'Algebra & Quadratic Systems Masterclass',
+        description: 'Interactive step-by-step factoring, zero-product property, and live board collaboration.',
+        learningObjectives: [
+          'Identify standard quadratic form ax² + bx + c = 0',
+          'Solve by factoring into binomials',
+          'Verify solutions through direct substitution',
+        ],
+        lessonDate: new Date().toISOString().split('T')[0],
+        scheduledAt: new Date().toISOString(),
+        status: 'active',
+        teacherId: 'teacher-primary',
+        teacherName: 'Prof. Clarke',
+        collaborationMode: 'everyone_can_edit',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+  },
+
+  async getLesson(id: string): Promise<Lesson & { participants?: LessonParticipant[]; board?: Whiteboard }> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(id)}`);
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // fallback
+    }
+
+    const fallbackBoard = await this.getBoard(id);
+    return {
+      id: `lesson-${id}`,
+      boardId: id,
+      subject: 'Mathematics',
+      topic: fallbackBoard.title || 'Live Whiteboard Lesson',
+      description: fallbackBoard.description || 'Interactive whiteboard teaching session',
+      learningObjectives: ['Engage collaboratively on whiteboard canvas', 'Solve visual problems'],
+      lessonDate: new Date().toISOString().split('T')[0],
+      scheduledAt: new Date().toISOString(),
+      status: 'active',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'everyone_can_edit',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      board: fallbackBoard,
+      participants: [],
+    };
+  },
+
+  async createLesson(data: {
+    subject: string;
+    topic: string;
+    description?: string;
+    learningObjectives?: string[];
+    lessonDate?: string;
+    scheduledAt?: string;
+    status?: 'scheduled' | 'active' | 'completed';
+    collaborationMode?: CollaborationMode;
+    boardId?: string;
+  }): Promise<Lesson> {
+    try {
+      const res = await fetch('/api/lessons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // offline fallback
+    }
+
+    const fallbackBoard = await this.createBoard(data.topic);
+    return {
+      id: `lesson-${Date.now()}`,
+      boardId: data.boardId || fallbackBoard.id,
+      subject: data.subject || 'Mathematics',
+      topic: data.topic,
+      description: data.description,
+      learningObjectives: data.learningObjectives || [],
+      lessonDate: data.lessonDate || new Date().toISOString().split('T')[0],
+      scheduledAt: data.scheduledAt || new Date().toISOString(),
+      status: data.status || 'active',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: data.collaborationMode || 'everyone_can_edit',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  },
+
+  async updateLesson(id: string, updates: Partial<Lesson>): Promise<Lesson> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // fallback
+    }
+    const current = await this.getLesson(id);
+    return { ...current, ...updates, updatedAt: new Date().toISOString() };
+  },
+
+  async updateLessonPermissions(
+    id: string,
+    collaborationMode: CollaborationMode,
+    studentPermissions?: Record<string, boolean>
+  ): Promise<{
+    collaborationMode: CollaborationMode;
+    studentPermissions?: Record<string, boolean>;
+    participants: LessonParticipant[];
+  }> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(id)}/permissions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collaborationMode, studentPermissions }),
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // fallback
+    }
+    return {
+      collaborationMode,
+      studentPermissions: studentPermissions || {},
+      participants: [],
+    };
+  },
+
+  async deleteLesson(id: string): Promise<void> {
+    try {
+      await fetch(`/api/lessons/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      // fallback
+    }
+  },
+
+  // ================= STUDENT NOTES =================
+  async getStudentLessonNote(lessonId: string, studentId = 'student-demo'): Promise<StudentNote | null> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes?studentId=${encodeURIComponent(studentId)}`);
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // fallback to localStorage
+    }
+
+    try {
+      const key = `student_note_${lessonId}_${studentId}`;
+      const saved = localStorage.getItem(key);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return null;
+  },
+
+  async saveStudentNote(
+    lessonId: string,
+    data: {
+      studentId?: string;
+      studentName?: string;
+      title?: string;
+      content: string;
+      keyTakeaways?: string[];
+      version?: number;
+    }
+  ): Promise<StudentNote> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) {
+          try {
+            const key = `student_note_${lessonId}_${data.studentId || 'student-demo'}`;
+            localStorage.setItem(key, JSON.stringify(json.data));
+          } catch {
+            // ignore
+          }
+          return json.data;
+        }
+      }
+    } catch {
+      // offline fallback
+    }
+
+    const fallbackNote: StudentNote = {
+      id: `note-${Date.now()}`,
+      lessonId,
+      studentId: data.studentId || 'student-demo',
+      studentName: data.studentName || 'Alex Student',
+      subject: 'Mathematics',
+      topic: 'Lesson Notes',
+      lessonDate: new Date().toISOString().split('T')[0],
+      title: data.title || 'My Lesson Notes',
+      content: data.content,
+      keyTakeaways: data.keyTakeaways || [],
+      version: (data.version || 1) + 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      const key = `student_note_${lessonId}_${fallbackNote.studentId}`;
+      localStorage.setItem(key, JSON.stringify(fallbackNote));
+    } catch {
+      // ignore
+    }
+
+    return fallbackNote;
+  },
+
+  async getStudentAllNotes(studentId = 'student-demo'): Promise<StudentNote[]> {
+    try {
+      const res = await fetch(`/api/students/${encodeURIComponent(studentId)}/notes`);
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && Array.isArray(json.data)) return json.data;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  },
+
+  async deleteStudentNote(lessonId: string, noteId: string): Promise<void> {
+    try {
+      await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes/${encodeURIComponent(noteId)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      // fallback
+    }
+  },
+
+  async generateLessonAISummary(lessonId: string): Promise<{
+    summary: string;
+    keyTakeaways?: string[];
+    revisionQuestions?: string[];
+  }> {
+    try {
+      const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/ai-summary`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const json = await safeJson(res);
+        if (json.success && json.data) return json.data;
+      }
+    } catch {
+      // ignore
+    }
+    return {
+      summary: 'Lesson completed. Concepts, whiteboard drawings, and step-by-step solutions recorded for review.',
+      revisionQuestions: [
+        'What were the key mathematical rules applied during this lesson?',
+        'How can you verify that the solutions obtained are correct?',
+        'What steps should be taken if you encounter a similar problem?',
+      ],
     };
   },
 

@@ -39,6 +39,7 @@ interface WhiteboardCanvasProps {
   onPanChange: (pan: { x: number; y: number }) => void;
   onZoomChange: (zoom: number) => void;
   currentPageId: string;
+  readOnly?: boolean;
 }
 
 export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
@@ -60,6 +61,7 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   onPanChange,
   onZoomChange,
   currentPageId,
+  readOnly = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -470,6 +472,15 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     e.currentTarget.setPointerCapture(e.pointerId);
     const worldPoint = screenToWorld(e.clientX, e.clientY);
 
+    // If canvas is read-only (e.g. student in view-only mode), only panning is allowed
+    if (readOnly) {
+      if (currentTool === 'pan' || e.button === 0 || e.button === 1 || e.buttons === 4) {
+        isPanning.current = true;
+        panStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+      }
+      return;
+    }
+
     // Pan mode or middle-click or spacebar
     if (currentTool === 'pan' || e.button === 1 || e.buttons === 4) {
       isPanning.current = true;
@@ -745,6 +756,7 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
   // Double click for sticky notes or text inline editing
   const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (readOnly) return;
     const worldPoint = screenToWorld(e.clientX, e.clientY);
     const hitSticky = objects.find(
       (o) =>
@@ -768,6 +780,14 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-white select-none">
+      {/* View-Only Indicator Banner */}
+      {readOnly && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 bg-amber-600/90 text-white rounded-full shadow-lg backdrop-blur-sm text-xs font-semibold flex items-center gap-2 pointer-events-none border border-amber-400/40">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+          <span>View-Only Mode: Teacher has paused student drawing. You can pan, zoom, and take personal study notes.</span>
+        </div>
+      )}
+
       <canvas
         ref={canvasRef}
         onPointerDown={handlePointerDown}

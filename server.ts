@@ -12,12 +12,12 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
-import { solveEquationLocally } from './src/utils/mathSolver.ts';
+import { solveEquationLocally } from './src/utils/mathSolver';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = typeof import.meta !== 'undefined' && import.meta?.url ? fileURLToPath(import.meta.url) : '';
+const __dirname = __filename ? path.dirname(__filename) : process.cwd();
 
 const app = express();
 const server = http.createServer(app);
@@ -34,16 +34,51 @@ const io = new SocketIOServer(server, {
 
 app.use(express.json({ limit: '15mb' }));
 
+// 1. Cross-Origin Resource Sharing (CORS) for seamless smartphone & live deployment access
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
+// 2. Vercel Serverless Rewrites Path Normalizer
+app.use((req, res, next) => {
+  const matchedPath =
+    req.headers['x-matched-path'] ||
+    req.headers['x-now-route-matches'] ||
+    req.headers['x-invoke-path'];
+  if (matchedPath && typeof matchedPath === 'string' && (req.url === '/api' || req.url === '/api/' || req.url === '/')) {
+    req.url = matchedPath;
+  }
+  next();
+});
+
+// 3. Health & Status Check Endpoint
+app.get(['/api', '/api/health', '/health'], (req, res) => {
+  res.json({
+    status: 'ok',
+    app: 'AI Smart Whiteboard',
+    version: '1.0.0',
+    timestamp: Date.now(),
+    geminiConfigured: !!(process.env.GEMINI_API_KEY || process.env.API_KEY),
+  });
+});
+
 // Handle Socket.IO requests directly inside Express so Vercel serverless lambdas can process Socket.IO long polling
 app.all(['/socket.io', '/socket.io/*'], (req, res) => {
   io.engine.handleRequest(req as any, res as any);
 });
 
-// Lazy helper to initialize Google GenAI when GEMINI_API_KEY is available
+// Lazy helper to initialize Google GenAI when GEMINI_API_KEY or API_KEY is available
 function getAi(): GoogleGenAI | null {
-  if (!process.env.GEMINI_API_KEY) return null;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!apiKey) return null;
   return new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -56,6 +91,9 @@ function getAi(): GoogleGenAI | null {
 const DATA_DIR = process.env.VERCEL ? path.join('/tmp', '.data') : path.join(__dirname, '.data');
 const BOARDS_FILE = path.join(DATA_DIR, 'boards.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const LESSONS_FILE = path.join(DATA_DIR, 'lessons.json');
+const NOTES_FILE = path.join(DATA_DIR, 'student_notes.json');
+const SUBJECTS_FILE = path.join(DATA_DIR, 'subjects.json');
 
 try {
   if (!fs.existsSync(DATA_DIR)) {
@@ -222,6 +260,227 @@ function saveBoardsToDisk() {
 }
 
 loadBoardsFromDisk();
+
+// ================= STRUCTURED LESSONS, SUBJECTS & STUDENT NOTES =================
+interface StoredSubject {
+  id: string;
+  name: string;
+  color: string;
+  icon?: string;
+}
+
+interface StoredLesson {
+  id: string;
+  boardId: string;
+  subject: string;
+  topic: string;
+  description?: string;
+  learningObjectives?: string[];
+  lessonDate: string; // YYYY-MM-DD local calendar date
+  scheduledAt: string; // ISO timestamp
+  status: 'scheduled' | 'active' | 'completed';
+  teacherId: string;
+  teacherName: string;
+  collaborationMode: 'everyone_can_edit' | 'teacher_only' | 'students_view_only';
+  studentPermissions?: Record<string, boolean>; // userId -> canEdit
+  createdAt: string;
+  updatedAt: string;
+  summary?: string;
+  revisionQuestions?: string[];
+}
+
+interface StoredStudentNote {
+  id: string;
+  lessonId: string;
+  studentId: string;
+  studentName: string;
+  subject: string;
+  topic: string;
+  lessonDate: string;
+  title: string;
+  content: string;
+  keyTakeaways?: string[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const subjectsMap = new Map<string, StoredSubject>();
+const lessonsMap = new Map<string, StoredLesson>();
+const studentNotesMap = new Map<string, StoredStudentNote>();
+// In-memory active live lesson participant presence: lessonId -> Map<userId, LessonParticipant>
+const activeLessonParticipants = new Map<string, Map<string, any>>();
+
+function loadSubjectsFromDisk() {
+  if (fs.existsSync(SUBJECTS_FILE)) {
+    try {
+      const raw = fs.readFileSync(SUBJECTS_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        list.forEach((s: StoredSubject) => subjectsMap.set(s.id, s));
+      }
+    } catch (err) {
+      console.error('Failed to parse subjects.json:', err);
+    }
+  }
+
+  // Pre-seed default core subjects
+  if (subjectsMap.size === 0) {
+    const defaultSubjects: StoredSubject[] = [
+      { id: 'subj-math', name: 'Mathematics', color: '#2563eb', icon: '📐' },
+      { id: 'subj-physics', name: 'Physics', color: '#7c3aed', icon: '⚡' },
+      { id: 'subj-chem', name: 'Chemistry', color: '#db2777', icon: '🧪' },
+      { id: 'subj-bio', name: 'Biology', color: '#059669', icon: '🧬' },
+      { id: 'subj-cs', name: 'Computer Science', color: '#0891b2', icon: '💻' },
+      { id: 'subj-lit', name: 'Literature & Writing', color: '#d97706', icon: '📖' },
+      { id: 'subj-history', name: 'History & Social Studies', color: '#4f46e5', icon: '🏛️' },
+      { id: 'subj-art', name: 'Art & Geometry Design', color: '#e11d48', icon: '🎨' },
+    ];
+    defaultSubjects.forEach((s) => subjectsMap.set(s.id, s));
+    saveSubjectsToDisk();
+  }
+}
+
+function saveSubjectsToDisk() {
+  try {
+    const list = Array.from(subjectsMap.values());
+    fs.writeFileSync(SUBJECTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to save subjects.json:', err);
+  }
+}
+
+function loadLessonsFromDisk() {
+  if (fs.existsSync(LESSONS_FILE)) {
+    try {
+      const raw = fs.readFileSync(LESSONS_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        list.forEach((l: StoredLesson) => lessonsMap.set(l.id, l));
+      }
+    } catch (err) {
+      console.error('Failed to parse lessons.json:', err);
+    }
+  }
+
+  // Pre-seed initial active lesson tied to the demo board
+  if (lessonsMap.size === 0) {
+    const today = new Date().toISOString().split('T')[0];
+    const initialLesson: StoredLesson = {
+      id: 'lesson-algebra-masterclass',
+      boardId: 'board-algebra-demo',
+      subject: 'Mathematics',
+      topic: 'Algebra & Quadratic Systems Masterclass',
+      description: 'Factoring quadratic equations, step-by-step graphical reasoning, and linear balancing.',
+      learningObjectives: [
+        'Master factoring of standard quadratic equations ax² + bx + c = 0',
+        'Extract real roots and explain mathematical steps clearly',
+        'Model equations visually on the collaborative whiteboard'
+      ],
+      lessonDate: today,
+      scheduledAt: new Date().toISOString(),
+      status: 'active',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'everyone_can_edit',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      summary: 'Students analyzed quadratic formulas and factor decomposition, verifying roots algebraically.',
+      revisionQuestions: [
+        'How does the discriminant b² - 4ac determine the nature of quadratic roots?',
+        'What is the first step in factoring x² - 5x + 6 = 0?',
+        'How do you check solutions on a Cartesian coordinate plane?'
+      ],
+    };
+    lessonsMap.set(initialLesson.id, initialLesson);
+
+    // Also seed a scheduled lesson for tomorrow
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const scheduledLesson: StoredLesson = {
+      id: 'lesson-physics-equilibrium',
+      boardId: 'board-geometry-demo',
+      subject: 'Physics',
+      topic: 'Newtonian Vectors & Statics Equilibrium',
+      description: 'Resolution of concurrent forces, inclined plane friction, and free-body diagrams.',
+      learningObjectives: [
+        'Construct free-body diagrams for inclined plane problems',
+        'Resolve force vectors into orthogonal components',
+        'Apply ΣF = 0 conditions for static equilibrium'
+      ],
+      lessonDate: tomorrow,
+      scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+      status: 'scheduled',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'teacher_only',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    lessonsMap.set(scheduledLesson.id, scheduledLesson);
+    saveLessonsToDisk();
+  }
+}
+
+function saveLessonsToDisk() {
+  try {
+    const list = Array.from(lessonsMap.values());
+    fs.writeFileSync(LESSONS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to save lessons.json:', err);
+  }
+}
+
+function loadNotesFromDisk() {
+  if (fs.existsSync(NOTES_FILE)) {
+    try {
+      const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        list.forEach((n: StoredStudentNote) => studentNotesMap.set(n.id, n));
+      }
+    } catch (err) {
+      console.error('Failed to parse student_notes.json:', err);
+    }
+  }
+
+  // Pre-seed sample student note for algebra masterclass
+  if (studentNotesMap.size === 0) {
+    const sampleNote: StoredStudentNote = {
+      id: 'note-sample-1',
+      lessonId: 'lesson-algebra-masterclass',
+      studentId: 'student-demo',
+      studentName: 'Alex Student',
+      subject: 'Mathematics',
+      topic: 'Algebra & Quadratic Systems Masterclass',
+      lessonDate: new Date().toISOString().split('T')[0],
+      title: 'Factoring Steps & Quadratic Formula Notes',
+      content: '## Key Takeaways from Today\'s Class\n- When factoring $x^2 - 5x + 6 = 0$, find two numbers with sum = -5 and product = +6.\n- The numbers are -2 and -3.\n- Therefore $(x - 2)(x - 3) = 0 \\implies x = 2$ or $x = 3$.\n- Remember to verify roots by plugging back into original expression!\n\n### Questions for Next Session\n- How to quickly factor when leading coefficient $a \\neq 1$?',
+      keyTakeaways: [
+        'Sum is -5, product is +6',
+        'Roots are x = 2 and x = 3',
+        'Always check by substitution'
+      ],
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    studentNotesMap.set(sampleNote.id, sampleNote);
+    saveNotesToDisk();
+  }
+}
+
+function saveNotesToDisk() {
+  try {
+    const list = Array.from(studentNotesMap.values());
+    fs.writeFileSync(NOTES_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to save student_notes.json:', err);
+  }
+}
+
+loadSubjectsFromDisk();
+loadLessonsFromDisk();
+loadNotesFromDisk();
 
 // Active Remote Sessions Map
 interface RemoteEventItem {
@@ -606,6 +865,508 @@ app.post('/api/boards/templates/:templateId', (req, res) => {
   res.status(201).json({ success: true, data: templateBoard });
 });
 
+// ================= SUBJECTS API =================
+// List all subjects
+app.get('/api/subjects', (req, res) => {
+  loadSubjectsFromDisk();
+  const list = Array.from(subjectsMap.values());
+  res.json({ success: true, data: list });
+});
+
+// Create new subject
+app.post('/api/subjects', (req, res) => {
+  const { name, color, icon } = req.body;
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ success: false, error: { message: 'Subject name is required' } });
+  }
+  const id = `subj-${Date.now()}-${name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 10)}`;
+  const newSubj: StoredSubject = {
+    id,
+    name: name.trim(),
+    color: color || '#3b82f6',
+    icon: icon || '📚',
+  };
+  subjectsMap.set(id, newSubj);
+  saveSubjectsToDisk();
+  res.status(201).json({ success: true, data: newSubj });
+});
+
+// ================= STRUCTURED LESSONS API =================
+// List lessons with optional query filters (subject, status, search, date, boardId)
+app.get('/api/lessons', (req, res) => {
+  loadLessonsFromDisk();
+  let list = Array.from(lessonsMap.values());
+
+  const { subject, status, search, date, boardId } = req.query;
+
+  if (subject && typeof subject === 'string' && subject !== 'all') {
+    list = list.filter((l) => l.subject.toLowerCase() === subject.toLowerCase());
+  }
+
+  if (status && typeof status === 'string' && status !== 'all') {
+    list = list.filter((l) => l.status === status);
+  }
+
+  if (date && typeof date === 'string') {
+    list = list.filter((l) => l.lessonDate === date);
+  }
+
+  if (boardId && typeof boardId === 'string') {
+    list = list.filter((l) => l.boardId === boardId);
+  }
+
+  if (search && typeof search === 'string') {
+    const q = search.toLowerCase();
+    list = list.filter(
+      (l) =>
+        l.topic.toLowerCase().includes(q) ||
+        l.subject.toLowerCase().includes(q) ||
+        (l.description && l.description.toLowerCase().includes(q)) ||
+        (l.learningObjectives && l.learningObjectives.some((obj) => obj.toLowerCase().includes(q)))
+    );
+  }
+
+  // Sort by lessonDate descending, then scheduledAt
+  list.sort((a, b) => new Date(b.lessonDate || b.scheduledAt).getTime() - new Date(a.lessonDate || a.scheduledAt).getTime());
+
+  // Attach live participant counts
+  const enriched = list.map((l) => {
+    const participants = activeLessonParticipants.get(l.id);
+    return {
+      ...l,
+      connectedParticipantsCount: participants ? participants.size : 0,
+    };
+  });
+
+  res.json({ success: true, data: enriched });
+});
+
+// Get single lesson by id (or boardId)
+app.get('/api/lessons/:id', (req, res) => {
+  loadLessonsFromDisk();
+  const id = req.params.id;
+  let lesson = lessonsMap.get(id);
+
+  // Fallback: check if id is a boardId
+  if (!lesson) {
+    lesson = Array.from(lessonsMap.values()).find((l) => l.boardId === id);
+  }
+
+  // If still not found, check if a board exists with this ID. If so, auto-create a companion lesson for backward compatibility!
+  if (!lesson && boardsMap.has(id)) {
+    const existingBoard = boardsMap.get(id)!;
+    const today = new Date().toISOString().split('T')[0];
+    const autoLesson: StoredLesson = {
+      id: `lesson-${existingBoard.id}`,
+      boardId: existingBoard.id,
+      subject: existingBoard.tags?.[0] || 'Mathematics',
+      topic: existingBoard.title || 'Interactive Whiteboard Lesson',
+      description: existingBoard.description || 'Interactive live teaching whiteboard session',
+      learningObjectives: ['Explore visual equations and solve step-by-step', 'Engage collaboratively on whiteboard canvas'],
+      lessonDate: today,
+      scheduledAt: new Date().toISOString(),
+      status: 'active',
+      teacherId: 'teacher-primary',
+      teacherName: 'Prof. Clarke',
+      collaborationMode: 'everyone_can_edit',
+      createdAt: existingBoard.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    lessonsMap.set(autoLesson.id, autoLesson);
+    saveLessonsToDisk();
+    lesson = autoLesson;
+  }
+
+  if (!lesson) {
+    return res.status(404).json({ success: false, error: { message: 'Lesson not found' } });
+  }
+
+  const participants = activeLessonParticipants.get(lesson.id);
+  const activeParticipantsList = participants ? Array.from(participants.values()) : [];
+  const linkedBoard = boardsMap.get(lesson.boardId) || null;
+
+  res.json({
+    success: true,
+    data: {
+      ...lesson,
+      participants: activeParticipantsList,
+      board: linkedBoard,
+    },
+  });
+});
+
+// Create new lesson
+app.post('/api/lessons', (req, res) => {
+  const {
+    subject,
+    topic,
+    description,
+    learningObjectives,
+    lessonDate,
+    scheduledAt,
+    status = 'active',
+    teacherName = 'Prof. Clarke',
+    teacherId = 'teacher-primary',
+    collaborationMode = 'everyone_can_edit',
+    boardId: providedBoardId,
+  } = req.body;
+
+  if (!topic || typeof topic !== 'string') {
+    return res.status(400).json({ success: false, error: { message: 'Lesson topic is required' } });
+  }
+
+  const resolvedSubject = subject && typeof subject === 'string' ? subject.trim() : 'Mathematics';
+  const today = new Date().toISOString().split('T')[0];
+  const finalLessonDate = lessonDate && typeof lessonDate === 'string' ? lessonDate : today;
+  const finalScheduledAt = scheduledAt && typeof scheduledAt === 'string' ? scheduledAt : new Date().toISOString();
+
+  let boardId = providedBoardId;
+  // If no board provided, create an empty linked whiteboard document!
+  if (!boardId || !boardsMap.has(boardId)) {
+    boardId = `board-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const pageId = `page-${Date.now()}-1`;
+    const newBoard: StoredBoard = {
+      id: boardId,
+      title: topic.trim(),
+      description: description || `Lesson board for ${resolvedSubject}: ${topic.trim()}`,
+      pages: [
+        {
+          id: pageId,
+          title: 'Lesson Canvas',
+          order: 0,
+          background: 'grid',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      objects: { [pageId]: [] },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      tags: [resolvedSubject, 'Live Lesson'],
+      permission: 'owner',
+    };
+    boardsMap.set(boardId, newBoard);
+    saveBoardsToDisk();
+  }
+
+  const lessonId = `lesson-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const newLesson: StoredLesson = {
+    id: lessonId,
+    boardId,
+    subject: resolvedSubject,
+    topic: topic.trim(),
+    description: description || '',
+    learningObjectives: Array.isArray(learningObjectives) ? learningObjectives : [],
+    lessonDate: finalLessonDate,
+    scheduledAt: finalScheduledAt,
+    status,
+    teacherId,
+    teacherName,
+    collaborationMode,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  lessonsMap.set(lessonId, newLesson);
+  saveLessonsToDisk();
+
+  // Broadcast creation to any listeners
+  io.emit('lesson:created', newLesson);
+
+  res.status(201).json({ success: true, data: newLesson });
+});
+
+// Update lesson
+app.put('/api/lessons/:id', (req, res) => {
+  const existing = lessonsMap.get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Lesson not found' } });
+  }
+
+  const {
+    subject,
+    topic,
+    description,
+    learningObjectives,
+    lessonDate,
+    scheduledAt,
+    status,
+    collaborationMode,
+    studentPermissions,
+  } = req.body;
+
+  if (subject !== undefined) existing.subject = subject;
+  if (topic !== undefined) existing.topic = topic;
+  if (description !== undefined) existing.description = description;
+  if (learningObjectives !== undefined) existing.learningObjectives = learningObjectives;
+  if (lessonDate !== undefined) existing.lessonDate = lessonDate;
+  if (scheduledAt !== undefined) existing.scheduledAt = scheduledAt;
+  if (status !== undefined) existing.status = status;
+  if (collaborationMode !== undefined) existing.collaborationMode = collaborationMode;
+  if (studentPermissions !== undefined) existing.studentPermissions = studentPermissions;
+  existing.updatedAt = new Date().toISOString();
+
+  lessonsMap.set(req.params.id, existing);
+  saveLessonsToDisk();
+
+  io.to(`lesson:${existing.id}`).emit('lesson:updated', existing);
+
+  res.json({ success: true, data: existing });
+});
+
+// Update lesson collaboration permissions
+app.put('/api/lessons/:id/permissions', (req, res) => {
+  const existing = lessonsMap.get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Lesson not found' } });
+  }
+
+  const { collaborationMode, studentPermissions } = req.body;
+  if (collaborationMode !== undefined) existing.collaborationMode = collaborationMode;
+  if (studentPermissions !== undefined) existing.studentPermissions = studentPermissions;
+  existing.updatedAt = new Date().toISOString();
+
+  lessonsMap.set(req.params.id, existing);
+  saveLessonsToDisk();
+
+  // Re-evaluate live participants in this lesson
+  const participants = activeLessonParticipants.get(existing.id);
+  if (participants) {
+    participants.forEach((p) => {
+      if (p.role === 'student') {
+        let canEdit = existing.collaborationMode === 'everyone_can_edit';
+        if (existing.studentPermissions && existing.studentPermissions[p.userId] !== undefined) {
+          canEdit = existing.studentPermissions[p.userId];
+        }
+        p.canEditBoard = canEdit;
+      }
+    });
+  }
+
+  const updatedParticipants = participants ? Array.from(participants.values()) : [];
+
+  // Broadcast immediate permission update to lesson and board rooms
+  io.to(`lesson:${existing.id}`).to(`board:${existing.boardId}`).emit('lesson:permissions_updated', {
+    lessonId: existing.id,
+    collaborationMode: existing.collaborationMode,
+    studentPermissions: existing.studentPermissions || {},
+    participants: updatedParticipants,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      collaborationMode: existing.collaborationMode,
+      studentPermissions: existing.studentPermissions,
+      participants: updatedParticipants,
+    },
+  });
+});
+
+// Delete lesson
+app.delete('/api/lessons/:id', (req, res) => {
+  const existing = lessonsMap.get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Lesson not found' } });
+  }
+
+  lessonsMap.delete(req.params.id);
+  saveLessonsToDisk();
+
+  io.emit('lesson:deleted', { lessonId: req.params.id });
+
+  res.json({ success: true, message: 'Lesson deleted successfully' });
+});
+
+// ================= INDIVIDUAL STUDENT LEARNING NOTES API =================
+// Get note for a student in a specific lesson
+app.get('/api/lessons/:id/notes', (req, res) => {
+  loadNotesFromDisk();
+  const lessonId = req.params.id;
+  const studentId = (req.query.studentId as string) || 'student-demo';
+
+  const notesList = Array.from(studentNotesMap.values()).filter(
+    (n) => n.lessonId === lessonId && n.studentId === studentId
+  );
+
+  const note = notesList.length > 0 ? notesList[0] : null;
+  res.json({ success: true, data: note });
+});
+
+// Save or update student note for a lesson (with autosave & optimistic concurrency)
+app.post('/api/lessons/:id/notes', (req, res) => {
+  loadNotesFromDisk();
+  const lessonId = req.params.id;
+  const {
+    studentId = 'student-demo',
+    studentName = 'Alex Student',
+    title,
+    content = '',
+    keyTakeaways = [],
+    version = 1,
+  } = req.body;
+
+  const lesson = lessonsMap.get(lessonId);
+
+  // Check if student already has a note for this lesson
+  let existing = Array.from(studentNotesMap.values()).find(
+    (n) => n.lessonId === lessonId && n.studentId === studentId
+  );
+
+  if (existing) {
+    existing.content = content;
+    if (title) existing.title = title;
+    if (keyTakeaways) existing.keyTakeaways = keyTakeaways;
+    existing.version = (existing.version || 1) + 1;
+    existing.updatedAt = new Date().toISOString();
+    studentNotesMap.set(existing.id, existing);
+  } else {
+    const noteId = `note-${Date.now()}-${studentId}`;
+    existing = {
+      id: noteId,
+      lessonId,
+      studentId,
+      studentName,
+      subject: lesson?.subject || 'General Study',
+      topic: lesson?.topic || 'Lesson Notes',
+      lessonDate: lesson?.lessonDate || new Date().toISOString().split('T')[0],
+      title: title || `${lesson?.topic || 'Lesson'} Notes`,
+      content,
+      keyTakeaways,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    studentNotesMap.set(noteId, existing);
+  }
+
+  saveNotesToDisk();
+
+  res.json({ success: true, data: existing });
+});
+
+// List all notes for a specific student across all lessons (Private learning notebook)
+app.get('/api/students/:studentId/notes', (req, res) => {
+  loadNotesFromDisk();
+  const studentId = req.params.studentId;
+  const notes = Array.from(studentNotesMap.values())
+    .filter((n) => n.studentId === studentId)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  res.json({ success: true, data: notes });
+});
+
+// Delete a note
+app.delete('/api/lessons/:id/notes/:noteId', (req, res) => {
+  loadNotesFromDisk();
+  const noteId = req.params.noteId;
+  if (studentNotesMap.has(noteId)) {
+    studentNotesMap.delete(noteId);
+    saveNotesToDisk();
+    return res.json({ success: true, message: 'Note deleted' });
+  }
+  res.status(404).json({ success: false, error: { message: 'Note not found' } });
+});
+
+// ================= AI LESSON PEDAGOGY & SUMMARY API =================
+app.post('/api/lessons/:id/ai-summary', async (req, res) => {
+  const lesson = lessonsMap.get(req.params.id);
+  if (!lesson) {
+    return res.status(404).json({ success: false, error: { message: 'Lesson not found' } });
+  }
+
+  const linkedBoard = boardsMap.get(lesson.boardId);
+  const objects = linkedBoard ? Object.values(linkedBoard.objects || {}).flat() : [];
+  const textAndEquations = objects
+    .map((o) => {
+      if (o.type === 'equation') return `Equation: ${o.equationData?.rawExpression || ''}`;
+      if (o.type === 'text') return `Text: ${o.textData?.text || ''}`;
+      if (o.type === 'sticky') return `Sticky: ${o.stickyData?.text || ''}`;
+      return null;
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  const ai = getAi();
+  if (ai) {
+    try {
+      const prompt = `You are an expert pedagogical teacher's assistant for an online smart whiteboard classroom.
+Generate a structured pedagogical summary and 3 student revision questions for this lesson:
+Subject: ${lesson.subject}
+Topic: ${lesson.topic}
+Description: ${lesson.description || 'N/A'}
+Learning Objectives: ${lesson.learningObjectives?.join(', ') || 'N/A'}
+Whiteboard Elements Recorded during class:
+${textAndEquations || 'Equations and notes written on live board'}
+
+Respond strictly in valid JSON format matching this schema:
+{
+  "summary": "Clear, concise 2-3 paragraph summary of core conceptual principles and problem solving steps taught",
+  "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
+  "revisionQuestions": [
+    "Question 1 testing core formula or definition?",
+    "Question 2 analyzing a step or common error?",
+    "Question 3 practice exercise with brief answer hint"
+  ]
+}`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        },
+      });
+
+      const parsed = JSON.parse(response.text || '{}');
+      lesson.summary = parsed.summary || 'Lesson concepts reviewed and verified.';
+      lesson.revisionQuestions = parsed.revisionQuestions || [];
+      lesson.updatedAt = new Date().toISOString();
+      lessonsMap.set(lesson.id, lesson);
+      saveLessonsToDisk();
+
+      io.to(`lesson:${lesson.id}`).emit('lesson:summary_ready', {
+        lessonId: lesson.id,
+        summary: lesson.summary,
+        revisionQuestions: lesson.revisionQuestions,
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          summary: lesson.summary,
+          keyTakeaways: parsed.keyTakeaways || [],
+          revisionQuestions: lesson.revisionQuestions,
+        },
+      });
+    } catch (err: any) {
+      console.warn('AI lesson summary failed, falling back to local synthesis:', err?.message || err);
+    }
+  }
+
+  // Fallback pedagogical synthesis
+  const fallbackSummary = `During this ${lesson.subject} lesson on "${lesson.topic}", the teacher and students engaged with core principles, worked through step-by-step mathematical reasoning, and verified solutions on the interactive whiteboard.`;
+  const fallbackQuestions = [
+    `What fundamental rule or formula governs "${lesson.topic}"?`,
+    'How do you check your solution to prevent common calculation mistakes?',
+    'What is one practical application of this concept in real-world problem solving?'
+  ];
+
+  lesson.summary = fallbackSummary;
+  lesson.revisionQuestions = fallbackQuestions;
+  lesson.updatedAt = new Date().toISOString();
+  lessonsMap.set(lesson.id, lesson);
+  saveLessonsToDisk();
+
+  res.json({
+    success: true,
+    data: {
+      summary: fallbackSummary,
+      revisionQuestions: fallbackQuestions,
+    },
+  });
+});
+
 // 8. Math Equation Solver API (Deterministic Engine + Gemini Flash AI)
 app.post('/api/equations/solve', async (req, res) => {
   const { expression, context } = req.body;
@@ -830,9 +1591,11 @@ app.post('/api/remote/sessions', (req, res) => {
   remoteSessions.set(sessionId, sessionObj);
   saveSessionsToDisk();
 
+  const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : req.protocol || 'https');
+  const host = req.headers['x-forwarded-host'] || req.get('host') || (process.env.VERCEL_URL ? process.env.VERCEL_URL : 'localhost:3000');
   const publicBaseUrl =
     (process.env.APP_URL || '').replace(/\/$/, '') ||
-    `${req.protocol}://${req.get('host')}`;
+    `${proto}://${host}`;
 
   const publicUrl = `${publicBaseUrl}/remote?session=${sessionId}&code=${passcode}`;
 
@@ -1195,6 +1958,8 @@ io.on('connection', (socket) => {
   let userMeta: { userId: string; userName: string; color: string } | null = null;
   let clientRole: 'controller' | 'display' | 'collaborator' | null = null;
 
+  let boundLessonId: string | null = null;
+
   // 1. Join Whiteboard Collaboration Room
   socket.on('board:join', (data: any) => {
     if (!data?.boardId) return;
@@ -1214,6 +1979,74 @@ io.on('connection', (socket) => {
     socket.to(`board:${boundBoardId}`).emit('collaborator:joined', { user: userMeta });
   });
 
+  // Join Live Teaching Lesson Room
+  socket.on('lesson:join', (data: any) => {
+    const { lessonId, userId, userName, role = 'student', color = '#3b82f6' } = data || {};
+    if (!lessonId) return;
+
+    loadLessonsFromDisk();
+    const lesson = lessonsMap.get(lessonId);
+    if (!lesson) {
+      socket.emit('lesson:error', { message: 'Lesson not found' });
+      return;
+    }
+
+    boundLessonId = lessonId;
+    boundBoardId = lesson.boardId;
+    userMeta = {
+      userId: userId || `user-${Math.random().toString(36).substring(2, 6)}`,
+      userName: userName || (role === 'teacher' ? 'Teacher' : 'Student'),
+      color: color || (role === 'teacher' ? '#2563eb' : '#10b981'),
+    };
+    clientRole = 'collaborator';
+
+    socket.join(`lesson:${lessonId}`);
+    socket.join(`board:${lesson.boardId}`);
+
+    // Calculate edit permission
+    let canEditBoard = true;
+    if (role === 'student') {
+      if (lesson.collaborationMode === 'teacher_only' || lesson.collaborationMode === 'students_view_only') {
+        canEditBoard = false;
+      }
+      if (lesson.studentPermissions && lesson.studentPermissions[userMeta.userId] !== undefined) {
+        canEditBoard = lesson.studentPermissions[userMeta.userId];
+      }
+    }
+
+    // Register active participant in lesson
+    if (!activeLessonParticipants.has(lessonId)) {
+      activeLessonParticipants.set(lessonId, new Map());
+    }
+    const participantRecord = {
+      userId: userMeta.userId,
+      userName: userMeta.userName,
+      role,
+      canEditBoard,
+      joinedAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString(),
+      color: userMeta.color,
+    };
+    activeLessonParticipants.get(lessonId)!.set(userMeta.userId, participantRecord);
+
+    const allParticipants = Array.from(activeLessonParticipants.get(lessonId)!.values());
+
+    // Send authoritative welcome payload to joining participant
+    socket.emit('lesson:joined', {
+      lesson,
+      user: participantRecord,
+      canEditBoard,
+      participants: allParticipants,
+    });
+
+    // Broadcast updated participant list to entire lesson room
+    io.to(`lesson:${lessonId}`).emit('lesson:participants_updated', {
+      lessonId,
+      participants: allParticipants,
+      joinedUser: participantRecord,
+    });
+  });
+
   // Real-time cursor & objects
   socket.on('board:cursor', (data: any) => {
     if (boundBoardId) {
@@ -1224,22 +2057,114 @@ io.on('connection', (socket) => {
         ...data,
       });
     }
+    if (boundLessonId) {
+      socket.to(`lesson:${boundLessonId}`).emit('lesson:cursor', {
+        userId: userMeta?.userId,
+        userName: userMeta?.userName,
+        color: userMeta?.color,
+        ...data,
+      });
+    }
   });
 
   socket.on('board:object_create', (data: any) => {
-    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_create', data);
+    if (boundBoardId && data?.pageId && data?.object) {
+      // Authoritative in-memory board sync
+      const b = boardsMap.get(boundBoardId);
+      if (b) {
+        if (!b.objects) b.objects = {};
+        if (!b.objects[data.pageId]) b.objects[data.pageId] = [];
+        // Guard against duplicate IDs
+        const existingIdx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
+        if (existingIdx === -1) {
+          b.objects[data.pageId].push(data.object);
+        } else {
+          b.objects[data.pageId][existingIdx] = data.object;
+        }
+        b.updatedAt = new Date().toISOString();
+        saveBoardsToDisk();
+      }
+      socket.to(`board:${boundBoardId}`).emit('board:object_create', data);
+    }
   });
 
   socket.on('board:object_update', (data: any) => {
-    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_update', data);
+    if (boundBoardId && data?.pageId && data?.object) {
+      const b = boardsMap.get(boundBoardId);
+      if (b && b.objects && b.objects[data.pageId]) {
+        const idx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
+        if (idx !== -1) {
+          b.objects[data.pageId][idx] = data.object;
+          b.updatedAt = new Date().toISOString();
+          saveBoardsToDisk();
+        }
+      }
+      socket.to(`board:${boundBoardId}`).emit('board:object_update', data);
+    }
   });
 
   socket.on('board:object_delete', (data: any) => {
-    if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:object_delete', data);
+    if (boundBoardId && data?.pageId && data?.objectId) {
+      const b = boardsMap.get(boundBoardId);
+      if (b && b.objects && b.objects[data.pageId]) {
+        b.objects[data.pageId] = b.objects[data.pageId].filter((o: any) => o.id !== data.objectId);
+        b.updatedAt = new Date().toISOString();
+        saveBoardsToDisk();
+      }
+      socket.to(`board:${boundBoardId}`).emit('board:object_delete', data);
+    }
+  });
+
+  socket.on('board:clear', (data: any) => {
+    if (boundBoardId && data?.pageId) {
+      const b = boardsMap.get(boundBoardId);
+      if (b && b.objects) {
+        b.objects[data.pageId] = [];
+        b.updatedAt = new Date().toISOString();
+        saveBoardsToDisk();
+      }
+      socket.to(`board:${boundBoardId}`).emit('board:clear', data);
+    }
   });
 
   socket.on('board:page_change', (data: any) => {
     if (boundBoardId) socket.to(`board:${boundBoardId}`).emit('board:page_change', data);
+  });
+
+  // Teacher permission changes broadcast
+  socket.on('lesson:update_permissions', (data: any) => {
+    const { lessonId, collaborationMode, studentPermissions } = data || {};
+    if (!lessonId) return;
+
+    loadLessonsFromDisk();
+    const lesson = lessonsMap.get(lessonId);
+    if (!lesson) return;
+
+    if (collaborationMode !== undefined) lesson.collaborationMode = collaborationMode;
+    if (studentPermissions !== undefined) lesson.studentPermissions = studentPermissions;
+    lesson.updatedAt = new Date().toISOString();
+    saveLessonsToDisk();
+
+    const participants = activeLessonParticipants.get(lessonId);
+    if (participants) {
+      participants.forEach((p) => {
+        if (p.role === 'student') {
+          let canEdit = lesson.collaborationMode === 'everyone_can_edit';
+          if (lesson.studentPermissions && lesson.studentPermissions[p.userId] !== undefined) {
+            canEdit = lesson.studentPermissions[p.userId];
+          }
+          p.canEditBoard = canEdit;
+        }
+      });
+    }
+
+    const updatedParticipants = participants ? Array.from(participants.values()) : [];
+    io.to(`lesson:${lessonId}`).emit('lesson:permissions_updated', {
+      lessonId,
+      collaborationMode: lesson.collaborationMode,
+      studentPermissions: lesson.studentPermissions || {},
+      participants: updatedParticipants,
+    });
   });
 
   // 2. Bind Smartphone Remote Session
@@ -1378,6 +2303,19 @@ io.on('connection', (socket) => {
 
   // Disconnect handler
   socket.on('disconnect', () => {
+    if (boundLessonId && userMeta?.userId) {
+      const participants = activeLessonParticipants.get(boundLessonId);
+      if (participants) {
+        participants.delete(userMeta.userId);
+        const remaining = Array.from(participants.values());
+        io.to(`lesson:${boundLessonId}`).emit('lesson:participants_updated', {
+          lessonId: boundLessonId,
+          participants: remaining,
+          leftUserId: userMeta.userId,
+        });
+      }
+    }
+
     if (boundSessionId && clientRole === 'controller') {
       const session = remoteSessions.get(boundSessionId);
       if (session) {
@@ -1397,10 +2335,11 @@ io.on('connection', (socket) => {
 
 // Setup Vite or Static File Serving
 async function startServer() {
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
   if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

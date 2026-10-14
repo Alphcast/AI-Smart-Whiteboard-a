@@ -7,9 +7,10 @@ import React from 'react';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface NavbarProps {
-  currentView: 'landing' | 'dashboard' | 'whiteboard' | 'remote';
-  onNavigate: (view: 'landing' | 'dashboard' | 'whiteboard') => void;
+  currentView: 'landing' | 'dashboard' | 'lessons' | 'notes' | 'whiteboard' | 'remote';
+  onNavigate: (view: 'landing' | 'dashboard' | 'lessons' | 'notes' | 'whiteboard') => void;
   onCreateBoard?: () => void;
+  onCreateLesson?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onCreateBoard }) => {
@@ -19,36 +20,45 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onCreat
         {/* Zone 1: Brand wordmark */}
         <button
           onClick={() => onNavigate('landing')}
-          className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 hover:text-blue-600 transition-colors text-left"
+          className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 hover:text-blue-600 transition-colors text-left cursor-pointer"
         >
           AI Smart Whiteboard
         </button>
 
-        {/* Zone 2: 4-5 single-line navigation links */}
+        {/* Zone 2: Navigation links */}
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">
           <button
             onClick={() => onNavigate('landing')}
-            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 ${
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 cursor-pointer ${
               currentView === 'landing' ? 'text-blue-600 font-semibold' : ''
             }`}
           >
             Overview
           </button>
-          <a
-            href="#mathematics"
-            onClick={(e) => {
-              if (currentView !== 'landing') {
-                e.preventDefault();
-                onNavigate('landing');
-                setTimeout(() => {
-                  document.getElementById('mathematics')?.scrollIntoView({ behavior: 'smooth' });
-                }, 100);
-              }
-            }}
-            className="whitespace-nowrap shrink-0 transition-colors hover:text-slate-900"
+          <button
+            onClick={() => onNavigate('lessons')}
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 cursor-pointer ${
+              currentView === 'lessons' ? 'text-blue-600 font-semibold' : ''
+            }`}
           >
-            Mathematics
-          </a>
+            Live Lessons
+          </button>
+          <button
+            onClick={() => onNavigate('dashboard')}
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 cursor-pointer ${
+              currentView === 'dashboard' ? 'text-blue-600 font-semibold' : ''
+            }`}
+          >
+            My Boards
+          </button>
+          <button
+            onClick={() => onNavigate('notes')}
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 cursor-pointer ${
+              currentView === 'notes' ? 'text-blue-600 font-semibold' : ''
+            }`}
+          >
+            My Notes
+          </button>
           <a
             href="#remote-touchpad"
             onClick={(e) => {
@@ -64,29 +74,6 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onCreat
           >
             Remote Touchpad
           </a>
-          <a
-            href="#templates"
-            onClick={(e) => {
-              if (currentView !== 'landing') {
-                e.preventDefault();
-                onNavigate('landing');
-                setTimeout(() => {
-                  document.getElementById('templates')?.scrollIntoView({ behavior: 'smooth' });
-                }, 100);
-              }
-            }}
-            className="whitespace-nowrap shrink-0 transition-colors hover:text-slate-900"
-          >
-            Templates
-          </a>
-          <button
-            onClick={() => onNavigate('dashboard')}
-            className={`whitespace-nowrap shrink-0 transition-colors hover:text-slate-900 ${
-              currentView === 'dashboard' ? 'text-blue-600 font-semibold' : ''
-            }`}
-          >
-            My Boards
-          </button>
         </nav>
 
         {/* Zone 3: Actions */}

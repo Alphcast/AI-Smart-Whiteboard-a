@@ -136,3 +136,5 @@ export interface Whiteboard {
   tags?: string[];
   permission?: 'owner' | 'editor' | 'viewer';
 }
+
+export * from './lesson';

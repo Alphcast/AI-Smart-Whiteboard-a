@@ -58,7 +58,7 @@ class RealtimeSocketClient {
   private maxHistoryLength = 150;
 
   private currentContext: {
-    type: 'board' | 'remote';
+    type: 'board' | 'remote' | 'lesson';
     payload: any;
   } | null = null;
 
@@ -183,6 +183,8 @@ class RealtimeSocketClient {
             this.socket?.emit('board:join', this.currentContext.payload);
           } else if (this.currentContext.type === 'remote') {
             this.socket?.emit('remote:bind', this.currentContext.payload);
+          } else if (this.currentContext.type === 'lesson') {
+            this.socket?.emit('lesson:join', this.currentContext.payload);
           }
         }
       });
@@ -287,7 +289,13 @@ class RealtimeSocketClient {
         'board:object_create',
         'board:object_update',
         'board:object_delete',
+        'board:clear',
         'board:page_change',
+        'lesson:joined',
+        'lesson:participants_updated',
+        'lesson:permissions_updated',
+        'lesson:cursor',
+        'lesson:summary_ready',
         'remote:connected',
         'remote:phone_paired',
         'remote:phone_disconnected',
@@ -324,6 +332,44 @@ class RealtimeSocketClient {
     const s = this.connect();
     if (s?.connected) {
       s.emit('board:join', this.currentContext.payload);
+    }
+  }
+
+  joinLesson(lessonId: string, user: { userId?: string; userName: string; role: 'teacher' | 'student'; color: string }) {
+    this.currentContext = {
+      type: 'lesson',
+      payload: {
+        lessonId,
+        userId: user.userId,
+        userName: user.userName,
+        role: user.role,
+        color: user.color,
+      },
+    };
+    const s = this.connect();
+    if (s?.connected) {
+      s.emit('lesson:join', this.currentContext.payload);
+    }
+  }
+
+  sendLessonCursor(lessonId: string, x: number, y: number) {
+    const s = this.connect();
+    if (s?.connected) {
+      s.emit('board:cursor', { x, y });
+    }
+  }
+
+  updateLessonPermissions(lessonId: string, collaborationMode: string, studentPermissions?: Record<string, boolean>) {
+    const s = this.connect();
+    if (s?.connected) {
+      s.emit('lesson:update_permissions', { lessonId, collaborationMode, studentPermissions });
+    }
+  }
+
+  clearBoard(pageId: string) {
+    const s = this.connect();
+    if (s?.connected) {
+      s.emit('board:clear', { pageId });
     }
   }
 

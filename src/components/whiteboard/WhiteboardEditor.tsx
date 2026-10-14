@@ -49,14 +49,23 @@ import { subscribeToSyncEvents } from '../../services/offlineSync';
 import { api } from '../../services/api';
 import { socket } from '../../services/socket';
 import { exportToPNG, exportToSVG, copyCanvasToClipboard } from '../../utils/export';
+import { Lesson, LessonParticipant, CollaborationMode } from '../../types/lesson';
+import { LessonClassroomBar } from '../collaboration/LessonClassroomBar';
+import { LiveParticipantsModal } from '../collaboration/LiveParticipantsModal';
+import { StudentNotesDrawer } from '../notes/StudentNotesDrawer';
+import { AISummaryModal } from '../lessons/AISummaryModal';
 
 interface WhiteboardEditorProps {
   boardId: string;
+  lessonId?: string;
+  initialRole?: 'teacher' | 'student';
   onBackToDashboard: () => void;
 }
 
 export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   boardId,
+  lessonId: propLessonId,
+  initialRole = 'teacher',
   onBackToDashboard,
 }) => {
   const [board, setBoard] = useState<Whiteboard | null>(null);
@@ -88,6 +97,30 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [selectedEquationForAI, setSelectedEquationForAI] = useState<WhiteboardObject | null>(null);
+
+  // Collaborative Lesson & Role State
+  const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [currentRole, setCurrentRole] = useState<'teacher' | 'student'>(initialRole);
+  const [currentUserName, setCurrentUserName] = useState<string>(() =>
+    initialRole === 'teacher' ? 'Prof. Clarke' : 'Alex Student'
+  );
+  const [currentUserId] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem('ai_whiteboard_user_id');
+      if (stored) return stored;
+      const gen = `user-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+      localStorage.setItem('ai_whiteboard_user_id', gen);
+      return gen;
+    } catch {
+      return `user-${Date.now().toString(36)}`;
+    }
+  });
+  const [collaborationMode, setCollaborationMode] = useState<CollaborationMode>('everyone_can_edit');
+  const [canEditBoard, setCanEditBoard] = useState<boolean>(initialRole === 'teacher');
+  const [lessonParticipants, setLessonParticipants] = useState<LessonParticipant[]>([]);
+  const [isNotesDrawerOpen, setIsNotesDrawerOpen] = useState(false);
+  const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
+  const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
 
   // Floating feedback toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -209,6 +242,40 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   currentPageIdRef.current = currentPageId;
   const boardRef = useRef(board);
   boardRef.current = board;
+  const currentRoleRef = useRef(currentRole);
+  currentRoleRef.current = currentRole;
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+
+  // Load Lesson Context for collaborative teaching
+  useEffect(() => {
+    let mounted = true;
+    const activeLessonLookup = propLessonId || boardId;
+    api
+      .getLesson(activeLessonLookup)
+      .then((data) => {
+        if (!mounted || !data) return;
+        setLesson(data);
+        setCollaborationMode(data.collaborationMode || 'everyone_can_edit');
+        if (data.participants) {
+          setLessonParticipants(data.participants);
+        }
+        if (currentRole === 'teacher') {
+          setCanEditBoard(true);
+        } else {
+          const myPerm = data.studentPermissions?.[currentUserId];
+          const allowed = myPerm !== undefined ? myPerm : data.collaborationMode === 'everyone_can_edit';
+          setCanEditBoard(allowed);
+        }
+      })
+      .catch((err) => {
+        console.warn('Lesson fetch fallback:', err);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [propLessonId, boardId, currentRole, currentUserId]);
 
   // 1. Load Board
   useEffect(() => {
@@ -260,7 +327,15 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     });
 
     socket.joinBoard(boardId, {
-      name: `User-${Math.floor(Math.random() * 900 + 100)}`,
+      name: currentUserName,
+      color: randomColor,
+    });
+
+    const activeLessonId = propLessonId || `lesson-${boardId}`;
+    socket.joinLesson(activeLessonId, {
+      userId: currentUserId,
+      userName: currentUserName,
+      role: currentRole,
       color: randomColor,
     });
 
@@ -363,6 +438,107 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
           },
         ];
       });
+    });
+
+    // Authoritative real-time whiteboard object synchronization across teacher & students
+    const unsubObjectCreate = socket.on('board:object_create', (data) => {
+      if (!data?.pageId || !data?.object) return;
+      setBoard((prev) => {
+        if (!prev) return prev;
+        const currentObjs = prev.objects[data.pageId] || [];
+        if (currentObjs.some((o) => o.id === data.object.id)) return prev;
+        return {
+          ...prev,
+          objects: {
+            ...prev.objects,
+            [data.pageId]: [...currentObjs, data.object],
+          },
+        };
+      });
+    });
+
+    const unsubObjectUpdate = socket.on('board:object_update', (data) => {
+      if (!data?.pageId || !data?.object) return;
+      setBoard((prev) => {
+        if (!prev) return prev;
+        const currentObjs = prev.objects[data.pageId] || [];
+        return {
+          ...prev,
+          objects: {
+            ...prev.objects,
+            [data.pageId]: currentObjs.map((o) => (o.id === data.object.id ? data.object : o)),
+          },
+        };
+      });
+    });
+
+    const unsubObjectDelete = socket.on('board:object_delete', (data) => {
+      if (!data?.pageId || !data?.objectId) return;
+      setBoard((prev) => {
+        if (!prev) return prev;
+        const currentObjs = prev.objects[data.pageId] || [];
+        return {
+          ...prev,
+          objects: {
+            ...prev.objects,
+            [data.pageId]: currentObjs.filter((o) => o.id !== data.objectId),
+          },
+        };
+      });
+    });
+
+    const unsubBoardClear = socket.on('board:clear', (data) => {
+      if (!data?.pageId) return;
+      setBoard((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          objects: {
+            ...prev.objects,
+            [data.pageId]: [],
+          },
+        };
+      });
+      showToast('Whiteboard canvas cleared');
+    });
+
+    // Real-time Lesson Collaboration & Permissions
+    const unsubLessonJoined = socket.on('lesson:joined', (data) => {
+      if (data?.lesson) {
+        setLesson(data.lesson);
+        setCollaborationMode(data.lesson.collaborationMode || 'everyone_can_edit');
+      }
+      if (data?.participants) {
+        setLessonParticipants(data.participants);
+      }
+      if (data?.canEditBoard !== undefined) {
+        setCanEditBoard(data.canEditBoard);
+      }
+    });
+
+    const unsubLessonParticipantsUpdated = socket.on('lesson:participants_updated', (data) => {
+      if (data?.participants) {
+        setLessonParticipants(data.participants);
+      }
+    });
+
+    const unsubLessonPermissionsUpdated = socket.on('lesson:permissions_updated', (data) => {
+      if (data?.collaborationMode) {
+        setCollaborationMode(data.collaborationMode);
+        if (currentRoleRef.current === 'student') {
+          const myPerm = data.studentPermissions?.[currentUserIdRef.current];
+          const allowed = myPerm !== undefined ? myPerm : data.collaborationMode === 'everyone_can_edit';
+          setCanEditBoard(allowed);
+          if (!allowed) {
+            showToast('🔒 Teacher has switched whiteboard to View-Only mode');
+          } else {
+            showToast('🔓 Whiteboard editing is now open for students!');
+          }
+        }
+      }
+      if (data?.participants) {
+        setLessonParticipants(data.participants);
+      }
     });
 
     const unsubPaired = socket.on('remote:phone_paired', (data) => {
@@ -576,6 +752,13 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubSocketError();
       unsubSocketDisconnect();
       unsubCursor();
+      unsubObjectCreate();
+      unsubObjectUpdate();
+      unsubObjectDelete();
+      unsubBoardClear();
+      unsubLessonJoined();
+      unsubLessonParticipantsUpdated();
+      unsubLessonPermissionsUpdated();
       unsubPaired();
       unsubDisconnected();
       unsubStatus();
@@ -746,11 +929,74 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
   const handleClearPage = useCallback(() => {
     if (!board) return;
-    if (confirm('Clear all drawings and items on this page?')) {
-      const newMap = { ...board.objects, [currentPageId]: [] };
-      updateObjectsWithHistory(newMap);
-    }
-  }, [board, currentPageId, updateObjectsWithHistory]);
+    const newMap = { ...board.objects, [currentPageId]: [] };
+    updateObjectsWithHistory(newMap);
+    socket.clearBoard(currentPageId);
+    showToast('Whiteboard canvas cleared');
+  }, [board, currentPageId, updateObjectsWithHistory, showToast]);
+
+  // Role & Collaboration Management Handlers
+  const handleChangeRole = useCallback(
+    (newRole: 'teacher' | 'student', newName: string) => {
+      setCurrentRole(newRole);
+      setCurrentUserName(newName);
+      currentRoleRef.current = newRole;
+
+      if (newRole === 'teacher') {
+        setCanEditBoard(true);
+        showToast('Switched to Teacher Mode: full editing & student control enabled');
+      } else {
+        const myPerm = lesson?.studentPermissions?.[currentUserId];
+        const allowed = myPerm !== undefined ? myPerm : collaborationMode === 'everyone_can_edit';
+        setCanEditBoard(allowed);
+        showToast(allowed ? 'Switched to Student Mode (Drawing enabled)' : 'Switched to Student Mode (View-only)');
+      }
+
+      const activeLessonId = lesson?.id || propLessonId || `lesson-${boardId}`;
+      socket.joinLesson(activeLessonId, {
+        userId: currentUserId,
+        userName: newName,
+        role: newRole,
+        color: newRole === 'teacher' ? '#2563eb' : '#10b981',
+      });
+    },
+    [boardId, propLessonId, lesson, currentUserId, collaborationMode, showToast]
+  );
+
+  const handleUpdateCollaborationMode = useCallback(
+    async (newMode: CollaborationMode) => {
+      setCollaborationMode(newMode);
+      const activeLessonId = lesson?.id || propLessonId || `lesson-${boardId}`;
+      try {
+        await api.updateLessonPermissions(activeLessonId, newMode, lesson?.studentPermissions);
+        socket.updateLessonPermissions(activeLessonId, newMode, lesson?.studentPermissions);
+        showToast(
+          newMode === 'everyone_can_edit'
+            ? '🔓 Students can now edit the whiteboard'
+            : '🔒 Switched to Teacher-Only mode'
+        );
+      } catch (err) {
+        console.error('Failed to update collaboration mode:', err);
+      }
+    },
+    [boardId, propLessonId, lesson, showToast]
+  );
+
+  const handleToggleStudentPermission = useCallback(
+    async (targetUserId: string, canEdit: boolean) => {
+      const activeLessonId = lesson?.id || propLessonId || `lesson-${boardId}`;
+      const nextPerms = { ...(lesson?.studentPermissions || {}), [targetUserId]: canEdit };
+      try {
+        await api.updateLessonPermissions(activeLessonId, collaborationMode, nextPerms);
+        socket.updateLessonPermissions(activeLessonId, collaborationMode, nextPerms);
+        setLesson((prev) => (prev ? { ...prev, studentPermissions: nextPerms } : prev));
+        showToast(canEdit ? 'Granted drawing permission to student' : 'Set student to view-only');
+      } catch (err) {
+        console.error('Failed to update student permission:', err);
+      }
+    },
+    [boardId, propLessonId, lesson, collaborationMode, showToast]
+  );
 
   // Mathematics Actions
   const handleSolveEquation = async (equationObj: WhiteboardObject) => {
@@ -1177,6 +1423,22 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         </div>
       </header>
 
+      {/* Classroom Collaboration Top Bar */}
+      <LessonClassroomBar
+        lesson={lesson}
+        currentRole={currentRole}
+        currentUserName={currentUserName}
+        onChangeRole={handleChangeRole}
+        participants={lessonParticipants}
+        canEditBoard={canEditBoard}
+        collaborationMode={collaborationMode}
+        onUpdateCollaborationMode={handleUpdateCollaborationMode}
+        onOpenParticipants={() => setIsParticipantsModalOpen(true)}
+        onOpenNotes={() => setIsNotesDrawerOpen(true)}
+        onOpenSummary={() => setIsSummaryModalOpen(true)}
+        onClearBoard={handleClearPage}
+      />
+
       {/* Main Workspace Area */}
       <div className="relative flex-1 w-full overflow-hidden">
         {/* Floating Left Toolbar */}
@@ -1191,6 +1453,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
             onClear={handleClearPage}
             onRecognizeEquation={handleRecognizeEquationPrompt}
             onExport={() => setIsExportModalOpen(true)}
+            readOnly={!canEditBoard}
           />
         </div>
 
@@ -1239,6 +1502,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
           onPanChange={setPan}
           onZoomChange={setZoom}
           currentPageId={currentPageId}
+          readOnly={!canEditBoard}
         />
 
         {/* Interactive Equation Cards on Canvas */}
@@ -1331,6 +1595,36 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
       />
+
+      {/* Private Student Learning Notes Drawer */}
+      <StudentNotesDrawer
+        isOpen={isNotesDrawerOpen}
+        onClose={() => setIsNotesDrawerOpen(false)}
+        lessonId={lesson?.id || `lesson-${board.id}`}
+        lesson={lesson}
+        studentId={currentUserId}
+        studentName={currentUserName}
+      />
+
+      {/* Classroom Live Participants & Permissions Modal */}
+      <LiveParticipantsModal
+        isOpen={isParticipantsModalOpen}
+        onClose={() => setIsParticipantsModalOpen(false)}
+        participants={lessonParticipants}
+        currentRole={currentRole}
+        collaborationMode={collaborationMode}
+        onUpdateCollaborationMode={handleUpdateCollaborationMode}
+        onToggleStudentPermission={handleToggleStudentPermission}
+      />
+
+      {/* AI Pedagogical Lesson Summary & Revision Modal */}
+      {lesson && (
+        <AISummaryModal
+          isOpen={isSummaryModalOpen}
+          onClose={() => setIsSummaryModalOpen(false)}
+          lesson={lesson}
+        />
+      )}
 
       {/* Floating Notification Toast */}
       {toastMessage && (

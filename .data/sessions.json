@@ -3217,5 +3217,13 @@
     "createdAt": 1791755339633,
     "lastActive": 1791755339633,
     "eventBuffer": []
+  },
+  {
+    "sessionId": "sess-1791960941179-xe4958",
+    "boardId": "test-board",
+    "passcode": "XE4958",
+    "createdAt": 1791960941179,
+    "lastActive": 1791960941179,
+    "eventBuffer": []
   }
 ]
