@@ -25,44 +25,53 @@ export default function App() {
     passcode?: string;
   } | null>(null);
 
-  // Check URL on load (supports `/remote?session=...`, `/lessons`, `/notes`, or `/whiteboard/:id`)
+  // Check URL on load and on browser back/forward (popstate)
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const session = searchParams.get('session');
-    const code = searchParams.get('code');
-    const lesson = searchParams.get('lesson');
-    const path = window.location.pathname;
+    const handleUrlChange = () => {
+      const searchParams = new URLSearchParams(window.location.search);
+      const session = searchParams.get('session');
+      const code = searchParams.get('code');
+      const lesson = searchParams.get('lesson');
+      const path = window.location.pathname;
 
-    if (session || path.includes('/remote')) {
-      const sessId = session || path.split('/remote/')[1] || '';
-      setRemoteSessionParams({ sessionId: sessId, passcode: code || undefined });
-      setCurrentView('remote');
-      return;
-    }
-
-    if (path.includes('/lessons')) {
-      setCurrentView('lessons');
-      return;
-    }
-
-    if (path.includes('/notes')) {
-      setCurrentView('notes');
-      return;
-    }
-
-    if (path.includes('/dashboard')) {
-      setCurrentView('dashboard');
-      return;
-    }
-
-    if (path.includes('/whiteboard/')) {
-      const bId = path.split('/whiteboard/')[1]?.split('?')[0];
-      if (bId) {
-        setActiveBoardId(bId);
-        if (lesson) setActiveLessonId(lesson);
-        setCurrentView('whiteboard');
+      if (session || path.includes('/remote')) {
+        const sessId = session || path.split('/remote/')[1] || '';
+        setRemoteSessionParams({ sessionId: sessId, passcode: code || undefined });
+        setCurrentView('remote');
+        return;
       }
-    }
+
+      if (path.includes('/lessons')) {
+        setCurrentView('lessons');
+        return;
+      }
+
+      if (path.includes('/notes')) {
+        setCurrentView('notes');
+        return;
+      }
+
+      if (path.includes('/dashboard')) {
+        setCurrentView('dashboard');
+        return;
+      }
+
+      if (path.includes('/whiteboard/')) {
+        const bId = path.split('/whiteboard/')[1]?.split('?')[0];
+        if (bId) {
+          setActiveBoardId(bId);
+          if (lesson) setActiveLessonId(lesson);
+          setCurrentView('whiteboard');
+          return;
+        }
+      }
+
+      setCurrentView('landing');
+    };
+
+    handleUrlChange();
+    window.addEventListener('popstate', handleUrlChange);
+    return () => window.removeEventListener('popstate', handleUrlChange);
   }, []);
 
   const handleOpenBoard = (boardId: string, lessonId?: string) => {
@@ -74,6 +83,16 @@ export default function App() {
       '',
       `/whiteboard/${boardId}${lessonId ? `?lesson=${encodeURIComponent(lessonId)}` : ''}`
     );
+  };
+
+  const handleOpenTemplate = async (templateId: string) => {
+    try {
+      const newBoard = await api.createFromTemplate(templateId);
+      handleOpenBoard(newBoard.id);
+    } catch (err) {
+      console.error('Failed to open template:', err);
+      handleOpenBoard('board-algebra-demo');
+    }
   };
 
   const handleCreateNewBoard = async () => {
@@ -131,10 +150,12 @@ export default function App() {
 
       {currentView === 'landing' && (
         <MarketingLanding
-          onStartWhiteboard={() => handleNavigate('dashboard')}
+          onStartWhiteboard={() => handleOpenBoard('board-algebra-demo')}
           onExploreTemplates={() => handleNavigate('dashboard')}
           onNavigateLessons={() => handleNavigate('lessons')}
           onNavigateNotes={() => handleNavigate('notes')}
+          onOpenBoard={handleOpenBoard}
+          onOpenTemplate={handleOpenTemplate}
         />
       )}
 

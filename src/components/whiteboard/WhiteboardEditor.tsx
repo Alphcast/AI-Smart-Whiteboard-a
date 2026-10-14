@@ -102,15 +102,44 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   // Collaborative Lesson & Role State
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [currentRole, setCurrentRole] = useState<'teacher' | 'student'>(initialRole);
-  const [currentUserName, setCurrentUserName] = useState<string>(() =>
-    initialRole === 'teacher' ? 'Prof. Clarke' : 'Alex Student'
-  );
+  const [userColor] = useState<string>(() => {
+    const userColors = [
+      '#2563eb', // blue
+      '#10b981', // emerald
+      '#8b5cf6', // purple
+      '#f59e0b', // amber
+      '#ec4899', // pink
+      '#06b6d4', // cyan
+      '#f97316', // orange
+      '#14b8a6', // teal
+    ];
+    try {
+      const stored = sessionStorage.getItem('ai_whiteboard_user_color');
+      if (stored) return stored;
+      const pick = userColors[Math.floor(Math.random() * userColors.length)];
+      sessionStorage.setItem('ai_whiteboard_user_color', pick);
+      return pick;
+    } catch {
+      return userColors[Math.floor(Math.random() * userColors.length)];
+    }
+  });
+  const [currentUserName, setCurrentUserName] = useState<string>(() => {
+    try {
+      const stored = sessionStorage.getItem('ai_whiteboard_user_name');
+      if (stored) return stored;
+      const name = initialRole === 'teacher' ? 'Prof. Clarke' : 'Alex Student';
+      sessionStorage.setItem('ai_whiteboard_user_name', name);
+      return name;
+    } catch {
+      return initialRole === 'teacher' ? 'Prof. Clarke' : 'Alex Student';
+    }
+  });
   const [currentUserId] = useState<string>(() => {
     try {
-      const stored = localStorage.getItem('ai_whiteboard_user_id');
+      const stored = sessionStorage.getItem('ai_whiteboard_user_id');
       if (stored) return stored;
       const gen = `user-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-      localStorage.setItem('ai_whiteboard_user_id', gen);
+      sessionStorage.setItem('ai_whiteboard_user_id', gen);
       return gen;
     } catch {
       return `user-${Date.now().toString(36)}`;
@@ -248,6 +277,93 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   currentRoleRef.current = currentRole;
   const currentUserIdRef = useRef(currentUserId);
   currentUserIdRef.current = currentUserId;
+  const userColorRef = useRef(userColor);
+  userColorRef.current = userColor;
+  const currentUserNameRef = useRef(currentUserName);
+  currentUserNameRef.current = currentUserName;
+  const currentToolRef = useRef(currentTool);
+  currentToolRef.current = currentTool;
+
+  // Real-time mouse cursor broadcasting
+  const lastCursorSendRef = useRef<number>(0);
+  const pendingCursorRef = useRef<{ point: { x: number; y: number }; isDrawing: boolean } | null>(null);
+  const cursorTimerRef = useRef<any>(null);
+
+  const broadcastCursor = useCallback(
+    (point: { x: number; y: number }, isDrawing: boolean, isOffCanvas = false) => {
+      const payload = {
+        boardId,
+        userId: currentUserIdRef.current,
+        userName: currentUserNameRef.current,
+        color: userColorRef.current,
+        role: currentRoleRef.current,
+        tool: currentToolRef.current,
+        x: Math.round(point.x * 10) / 10,
+        y: Math.round(point.y * 10) / 10,
+        isDrawing,
+        isOffCanvas,
+        timestamp: Date.now(),
+      };
+
+      socket.emit('board:cursor', payload);
+      lastCursorSendRef.current = performance.now();
+    },
+    [boardId]
+  );
+
+  const handleCursorMove = useCallback(
+    (point: { x: number; y: number }, isDrawing: boolean) => {
+      const now = performance.now();
+      const elapsed = now - lastCursorSendRef.current;
+
+      // Throttle cursor emissions to ~35ms (~28-30 updates/sec) with trailing execution
+      if (elapsed > 35) {
+        if (cursorTimerRef.current) {
+          clearTimeout(cursorTimerRef.current);
+          cursorTimerRef.current = null;
+        }
+        broadcastCursor(point, isDrawing, false);
+      } else {
+        pendingCursorRef.current = { point, isDrawing };
+        if (!cursorTimerRef.current) {
+          cursorTimerRef.current = setTimeout(() => {
+            cursorTimerRef.current = null;
+            if (pendingCursorRef.current) {
+              broadcastCursor(
+                pendingCursorRef.current.point,
+                pendingCursorRef.current.isDrawing,
+                false
+              );
+              pendingCursorRef.current = null;
+            }
+          }, 35 - elapsed);
+        }
+      }
+    },
+    [broadcastCursor]
+  );
+
+  const handleCursorLeave = useCallback(() => {
+    if (cursorTimerRef.current) {
+      clearTimeout(cursorTimerRef.current);
+      cursorTimerRef.current = null;
+    }
+    broadcastCursor({ x: 0, y: 0 }, false, true);
+  }, [broadcastCursor]);
+
+  // Cleanly dismiss cursor when leaving tab / window
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      socket.emit('board:cursor', {
+        userId: currentUserId,
+        isOffCanvas: true,
+      });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUserId]);
 
   // Load Lesson Context for collaborative teaching
   useEffect(() => {
@@ -329,8 +445,10 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     });
 
     socket.joinBoard(boardId, {
+      userId: currentUserId,
       name: currentUserName,
-      color: randomColor,
+      color: userColor,
+      role: currentRole,
     });
 
     const activeLessonId = propLessonId || `lesson-${boardId}`;
@@ -338,7 +456,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       userId: currentUserId,
       userName: currentUserName,
       role: currentRole,
-      color: randomColor,
+      color: userColor,
     });
 
     // Check and auto-bind active remote session if one already exists for this board, or provision one immediately
@@ -438,22 +556,47 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       logWhiteboard('warn', '🔌 Socket.IO disconnected:', data);
     });
 
-    const unsubCursor = socket.on('board:cursor', (data) => {
+    const handleRemoteCursor = (data: any) => {
+      if (!data || !data.userId || data.userId === currentUserIdRef.current) return;
       setCollaborators((prev) => {
         const filtered = prev.filter((c) => c.userId !== data.userId);
+        if (data.isOffCanvas) {
+          return filtered;
+        }
         return [
           ...filtered,
           {
             userId: data.userId,
-            userName: data.userName,
-            color: data.color,
+            userName: data.userName || 'Collaborator',
+            color: data.color || '#3b82f6',
+            role: data.role,
+            tool: data.tool,
+            isDrawing: Boolean(data.isDrawing),
+            isOffCanvas: false,
             x: data.x,
             y: data.y,
             lastUpdated: Date.now(),
           },
         ];
       });
+    };
+
+    const unsubCursor = socket.on('board:cursor', handleRemoteCursor);
+    const unsubLessonCursor = socket.on('lesson:cursor', handleRemoteCursor);
+    const unsubCollaboratorLeft = socket.on('collaborator:left', (data) => {
+      if (data?.userId) {
+        setCollaborators((prev) => prev.filter((c) => c.userId !== data.userId));
+      }
     });
+
+    // Prune stale collaborator cursors if inactive for > 6 seconds
+    const cursorPruneInterval = setInterval(() => {
+      const now = Date.now();
+      setCollaborators((prev) => {
+        const active = prev.filter((c) => now - (c.lastUpdated || 0) < 6000);
+        return active.length !== prev.length ? active : prev;
+      });
+    }, 2000);
 
     // Authoritative real-time whiteboard object synchronization across teacher & students
     const unsubObjectCreate = socket.on('board:object_create', (data) => {
@@ -755,6 +898,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
     return () => {
       clearInterval(heartbeatInterval);
+      clearInterval(cursorPruneInterval);
       unsubP2PHostInit();
       unsubP2PHostReady();
       unsubP2PIncoming();
@@ -768,6 +912,8 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubSocketError();
       unsubSocketDisconnect();
       unsubCursor();
+      unsubLessonCursor();
+      unsubCollaboratorLeft();
       unsubObjectCreate();
       unsubObjectUpdate();
       unsubObjectDelete();
@@ -968,15 +1114,26 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         showToast(allowed ? 'Switched to Student Mode (Drawing enabled)' : 'Switched to Student Mode (View-only)');
       }
 
+      const activeColor = newRole === 'teacher' ? '#2563eb' : userColor;
+      userColorRef.current = activeColor;
+      currentUserNameRef.current = newName;
+
+      socket.joinBoard(boardId, {
+        userId: currentUserId,
+        name: newName,
+        color: activeColor,
+        role: newRole,
+      });
+
       const activeLessonId = lesson?.id || propLessonId || `lesson-${boardId}`;
       socket.joinLesson(activeLessonId, {
         userId: currentUserId,
         userName: newName,
         role: newRole,
-        color: newRole === 'teacher' ? '#2563eb' : '#10b981',
+        color: activeColor,
       });
     },
-    [boardId, propLessonId, lesson, currentUserId, collaborationMode, showToast]
+    [boardId, propLessonId, lesson, currentUserId, userColor, collaborationMode, showToast]
   );
 
   const handleUpdateCollaborationMode = useCallback(
@@ -1291,6 +1448,30 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2">
+          {/* Active Collaborators Live Cursors Presence Indicator */}
+          {collaborators.length > 0 && (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-50/90 border border-blue-200/80 rounded-xl text-xs shadow-xs"
+              title={`${collaborators.length} active collaborator${collaborators.length > 1 ? 's' : ''} working on this whiteboard with live cursors`}
+            >
+              <div className="flex -space-x-1.5 overflow-hidden">
+                {collaborators.slice(0, 4).map((c) => (
+                  <div
+                    key={c.userId}
+                    className="inline-flex h-5 w-5 rounded-full ring-2 ring-white text-[9px] font-bold text-white items-center justify-center uppercase shrink-0 shadow-xs"
+                    style={{ backgroundColor: c.color || '#3b82f6' }}
+                    title={`${c.userName} (${c.role || 'collaborator'})${c.isDrawing ? ' • Drawing' : ''}`}
+                  >
+                    {c.userName.charAt(0)}
+                  </div>
+                ))}
+              </div>
+              <span className="text-[11px] font-semibold text-blue-700 hidden sm:inline">
+                {collaborators.length} live
+              </span>
+            </div>
+          )}
+
           {/* Real-time Smartphone Touchpad Connection Status Indicator */}
           <button
             onClick={() => setIsPhoneModalOpen(true)}
@@ -1519,6 +1700,8 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
           onZoomChange={setZoom}
           currentPageId={currentPageId}
           readOnly={!canEditBoard}
+          onCursorMove={handleCursorMove}
+          onCursorLeave={handleCursorLeave}
         />
 
         {/* Interactive Equation Cards on Canvas */}

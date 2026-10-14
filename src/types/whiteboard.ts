@@ -121,6 +121,11 @@ export interface CollaboratorCursor {
   color: string;
   x: number;
   y: number;
+  role?: 'teacher' | 'student';
+  isDrawing?: boolean;
+  isOffCanvas?: boolean;
+  tool?: ToolType;
+  lastUpdated?: number;
 }
 
 export interface Whiteboard {

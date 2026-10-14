@@ -13,9 +13,10 @@ export default function handler(req: any, res: any) {
         ? req.query.__path.join('/')
         : req.query.__path;
       const cleanPath = String(rawPath).startsWith('/') ? String(rawPath) : `/${rawPath}`;
+      delete req.query.__path;
 
       // Build clean query string without __path
-      const urlParts = req.url.split('?');
+      const urlParts = (req.url || '').split('?');
       let search = '';
       if (urlParts.length > 1) {
         const params = new URLSearchParams(urlParts[1]);
@@ -26,31 +27,39 @@ export default function handler(req: any, res: any) {
 
       if (cleanPath.startsWith('/socket.io')) {
         req.url = `${cleanPath}${search}`;
+      } else if (cleanPath.startsWith('/api')) {
+        req.url = `${cleanPath}${search}`;
       } else {
         req.url = `/api${cleanPath}${search}`;
       }
+    } else if (req.query && req.query.all) {
+      // 2. Resolve from catch-all route api/[...all].ts
+      const allParts = Array.isArray(req.query.all) ? req.query.all.join('/') : req.query.all;
+      delete req.query.all;
+      const cleanAll = String(allParts).startsWith('/') ? String(allParts) : `/${allParts}`;
+      const urlParts = (req.url || '').split('?');
+      const search = urlParts.length > 1 ? `?${urlParts.slice(1).join('?')}` : '';
+
+      if (cleanAll.startsWith('/socket.io')) {
+        req.url = `${cleanAll}${search}`;
+      } else if (cleanAll.startsWith('/api')) {
+        req.url = `${cleanAll}${search}`;
+      } else {
+        req.url = `/api${cleanAll}${search}`;
+      }
     } else {
-      // 2. Check Vercel routing headers
-      const matched =
-        req.headers['x-matched-path'] ||
-        req.headers['x-vercel-matched-path'] ||
-        req.headers['x-now-route-matches'] ||
-        req.headers['x-invoke-path'];
+      // 3. Fallback: normalize req.url for native Vercel function routing
+      let urlPath = req.url || '/api';
+      const [pathname, ...rest] = urlPath.split('?');
+      const search = rest.length > 0 ? `?${rest.join('?')}` : '';
 
-      if (matched && typeof matched === 'string' && (matched.startsWith('/api/') || matched.startsWith('/socket.io/'))) {
-        req.url = matched;
-      } else if (req.url) {
-        // 3. Fallback: ensure /api prefix is present for subpaths
-        const [pathname, ...rest] = req.url.split('?');
-        const search = rest.length > 0 ? `?${rest.join('?')}` : '';
-
-        if (!pathname.startsWith('/api') && !pathname.startsWith('/socket.io')) {
-          req.url = `/api${pathname.startsWith('/') ? pathname : `/${pathname}`}${search}`;
-        }
+      // CRITICAL: Do NOT overwrite req.url with x-matched-path if it contains dynamic segment '[...all]'
+      if (!pathname.startsWith('/api') && !pathname.startsWith('/socket.io') && !pathname.startsWith('/health')) {
+        req.url = `/api${pathname.startsWith('/') ? pathname : `/${pathname}`}${search}`;
       }
     }
   } catch (err) {
-    console.error('Error normalizing Vercel request path:', err);
+    console.error('Error normalizing Vercel request path in api/index.ts:', err);
   }
 
   return app(req, res);

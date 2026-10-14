@@ -19,6 +19,8 @@ import {
   Zap,
   Shield,
   HelpCircle,
+  Users,
+  FileText,
 } from 'lucide-react';
 import { LatexRenderer } from '../math/LatexRenderer';
 import { solveEquationLocally } from '../../utils/mathSolver';
@@ -28,6 +30,8 @@ interface MarketingLandingProps {
   onExploreTemplates: () => void;
   onNavigateLessons?: () => void;
   onNavigateNotes?: () => void;
+  onOpenBoard?: (boardId: string) => void;
+  onOpenTemplate?: (templateId: string) => void;
 }
 
 export const MarketingLanding: React.FC<MarketingLandingProps> = ({
@@ -35,6 +39,8 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
   onExploreTemplates,
   onNavigateLessons,
   onNavigateNotes,
+  onOpenBoard,
+  onOpenTemplate,
 }) => {
   // Interactive Math Demo on Landing Page
   const [demoInput, setDemoInput] = useState('2x + 5 = 15');
@@ -105,8 +111,12 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
           </div>
 
           {/* Right Column: Realistic Whiteboard Interface Preview */}
-          <div className="lg:col-span-6">
-            <div className="bg-slate-900 rounded-2xl p-2 shadow-2xl border border-slate-800">
+          <div
+            className="lg:col-span-6 cursor-pointer group"
+            onClick={onStartWhiteboard}
+            title="Launch Interactive Whiteboard Canvas"
+          >
+            <div className="bg-slate-900 rounded-2xl p-2 shadow-2xl border border-slate-800 transition-all group-hover:ring-2 group-hover:ring-blue-500/50">
               {/* Window Chrome Header */}
               <div className="bg-slate-800/80 rounded-t-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-300 border-b border-slate-700/60">
                 <div className="flex items-center gap-2">
@@ -116,6 +126,10 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
                     <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
                   </div>
                   <span className="font-medium text-slate-200 ml-2">Algebra Lesson — Quadratic Systems</span>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-600 text-white ml-1.5 inline-flex items-center gap-1 group-hover:bg-blue-500 transition-colors">
+                    <span>Open Canvas</span>
+                    <ArrowRight className="w-2.5 h-2.5" />
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -562,7 +576,7 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <div
-              onClick={onExploreTemplates}
+              onClick={() => (onOpenTemplate ? onOpenTemplate('algebra') : onExploreTemplates())}
               className="group p-6 bg-slate-50 hover:bg-white border border-slate-200 hover:border-blue-400 rounded-2xl transition-all shadow-xs hover:shadow-md cursor-pointer space-y-3"
             >
               <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-base">
@@ -580,7 +594,7 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
             </div>
 
             <div
-              onClick={onExploreTemplates}
+              onClick={() => (onOpenTemplate ? onOpenTemplate('geometry') : onExploreTemplates())}
               className="group p-6 bg-slate-50 hover:bg-white border border-slate-200 hover:border-purple-400 rounded-2xl transition-all shadow-xs hover:shadow-md cursor-pointer space-y-3"
             >
               <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-base">
@@ -598,7 +612,7 @@ export const MarketingLanding: React.FC<MarketingLandingProps> = ({
             </div>
 
             <div
-              onClick={onExploreTemplates}
+              onClick={() => (onOpenTemplate ? onOpenTemplate('brainstorm') : onExploreTemplates())}
               className="group p-6 bg-slate-50 hover:bg-white border border-slate-200 hover:border-amber-400 rounded-2xl transition-all shadow-xs hover:shadow-md cursor-pointer space-y-3"
             >
               <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-base">

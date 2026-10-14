@@ -42,6 +42,8 @@ class RealtimeSocketClient {
   private p2pConnection: DataConnection | null = null;
   private p2pConnections: Set<DataConnection> = new Set();
   private broadcastChannel: BroadcastChannel | null = null;
+  private boardBroadcastChannel: BroadcastChannel | null = null;
+  private currentBoardUserId: string | null = null;
   private listeners: Map<string, Set<MessageHandler>> = new Map();
   private diagnosticListeners: Set<(event: DiagnosticEventItem) => void> = new Set();
 
@@ -324,14 +326,46 @@ class RealtimeSocketClient {
     return this.socket!;
   }
 
-  joinBoard(boardId: string, user: { name: string; color: string }) {
+  joinBoard(boardId: string, user: { userId?: string; name: string; color: string; role?: 'teacher' | 'student' }) {
+    this.currentBoardUserId = user.userId || null;
     this.currentContext = {
       type: 'board',
-      payload: { boardId, userName: user.name, color: user.color },
+      payload: {
+        boardId,
+        userId: user.userId,
+        userName: user.name,
+        color: user.color,
+        role: user.role,
+      },
     };
+    this.initBoardBroadcastChannel(boardId, user.userId);
     const s = this.connect();
     if (s?.connected) {
       s.emit('board:join', this.currentContext.payload);
+    }
+  }
+
+  private initBoardBroadcastChannel(boardId: string, userId?: string) {
+    try {
+      if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+      if (this.boardBroadcastChannel) {
+        this.boardBroadcastChannel.close();
+      }
+      this.boardBroadcastChannel = new BroadcastChannel(`wb-board-sync-${boardId}`);
+      this.boardBroadcastChannel.onmessage = (event) => {
+        const data = event.data;
+        if (!data) return;
+        // Do not process messages that originated from our own tab
+        if (userId && data._senderUserId === userId) return;
+        const type = data.type || (data.payload && data.payload.type);
+        if (type) {
+          this.recordDiagnostic('broadcast', type, data, 'in');
+          this.emitLocal(type, data);
+          this.emitLocal('*', data);
+        }
+      };
+    } catch {
+      // ignore
     }
   }
 
@@ -357,6 +391,22 @@ class RealtimeSocketClient {
     if (s?.connected) {
       s.emit('board:cursor', { x, y });
     }
+  }
+
+  sendBoardCursor(cursor: {
+    x: number;
+    y: number;
+    isDrawing?: boolean;
+    isOffCanvas?: boolean;
+    tool?: string;
+    userName?: string;
+    color?: string;
+    role?: string;
+  }) {
+    this.emit('board:cursor', {
+      userId: this.currentBoardUserId,
+      ...cursor,
+    });
   }
 
   updateLessonPermissions(lessonId: string, collaborationMode: string, studentPermissions?: Record<string, boolean>) {
@@ -774,6 +824,21 @@ class RealtimeSocketClient {
       }
     }
 
+    if (this.boardBroadcastChannel) {
+      try {
+        this.boardBroadcastChannel.postMessage({
+          ...payload,
+          _senderUserId: this.currentBoardUserId,
+        });
+        if (!sentVia) {
+          this.recordDiagnostic('broadcast', event, data, 'out');
+          sentVia = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     // 3. Send via Socket.IO
     if (this.socket && this.socket.connected) {
       this.socket.emit(event, data);
@@ -969,6 +1034,11 @@ class RealtimeSocketClient {
       this.broadcastChannel.close();
       this.broadcastChannel = null;
     }
+    if (this.boardBroadcastChannel) {
+      this.boardBroadcastChannel.close();
+      this.boardBroadcastChannel = null;
+    }
+    this.currentBoardUserId = null;
     this.isConnectedState = false;
     this.connectionStatus = 'disconnected';
     this.currentContext = null;

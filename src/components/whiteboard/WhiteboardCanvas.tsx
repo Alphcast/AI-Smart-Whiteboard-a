@@ -40,6 +40,8 @@ interface WhiteboardCanvasProps {
   onZoomChange: (zoom: number) => void;
   currentPageId: string;
   readOnly?: boolean;
+  onCursorMove?: (point: Point, isDrawing: boolean) => void;
+  onCursorLeave?: () => void;
 }
 
 export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
@@ -62,6 +64,8 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   onZoomChange,
   currentPageId,
   readOnly = false,
+  onCursorMove,
+  onCursorLeave,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -355,16 +359,115 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
     // 4. Draw Collaborators' Cursors
     for (const c of collaborators) {
+      if (c.isOffCanvas) continue;
+      // Skip stale cursors (older than 10s)
+      if (c.lastUpdated && Date.now() - c.lastUpdated > 10000) continue;
+
       ctx.save();
-      ctx.fillStyle = c.color;
+      const cx = c.x;
+      const cy = c.y;
+      const s = 1 / zoom; // scale invariant size multiplier
+
+      // Drop shadow for cursor and label
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.3)';
+      ctx.shadowBlur = 6 * s;
+      ctx.shadowOffsetX = 1 * s;
+      ctx.shadowOffsetY = 2 * s;
+
+      // Draw pointer arrow (classic collaborative multiplayer cursor)
+      ctx.fillStyle = c.color || '#3b82f6';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.75 * s;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+
       ctx.beginPath();
-      ctx.arc(c.x, c.y, 6 / zoom, 0, Math.PI * 2);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx, cy + 18 * s);
+      ctx.lineTo(cx + 4.5 * s, cy + 13.5 * s);
+      ctx.lineTo(cx + 9 * s, cy + 22 * s);
+      ctx.lineTo(cx + 12.5 * s, cy + 20.5 * s);
+      ctx.lineTo(cx + 8 * s, cy + 12 * s);
+      ctx.lineTo(cx + 15 * s, cy + 12 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Shadow for text pill
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+      ctx.shadowBlur = 4 * s;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 1 * s;
+
+      // Label text preparation with tool indicator and role badge
+      const rolePrefix = c.role === 'teacher' ? '🎓 ' : '';
+      let toolIcon = '';
+      if (c.tool === 'laser') toolIcon = ' 🔴';
+      else if (c.tool === 'highlighter') toolIcon = ' 🖍️';
+      else if (c.tool === 'eraser') toolIcon = ' 🧹';
+      else if (c.tool === 'sticky') toolIcon = ' 📝';
+      else if (c.tool === 'text') toolIcon = ' 🔤';
+      else if (c.isDrawing) toolIcon = ' ✍️';
+
+      const labelText = `${rolePrefix}${c.userName}${toolIcon}`;
+
+      const fontSize = 11 * s;
+      ctx.font = `600 ${fontSize}px sans-serif`;
+      const textMetrics = ctx.measureText(labelText);
+      const paddingX = 6 * s;
+      const paddingY = 3 * s;
+      const pillWidth = textMetrics.width + paddingX * 2;
+      const pillHeight = fontSize + paddingY * 2;
+      const pillX = cx + 12 * s;
+      const pillY = cy + 14 * s;
+      const radius = 4 * s;
+
+      // Rounded rectangle for name tag pill
+      ctx.fillStyle = c.color || '#3b82f6';
+      ctx.beginPath();
+      ctx.moveTo(pillX + radius, pillY);
+      ctx.lineTo(pillX + pillWidth - radius, pillY);
+      ctx.quadraticCurveTo(pillX + pillWidth, pillY, pillX + pillWidth, pillY + radius);
+      ctx.lineTo(pillX + pillWidth, pillY + pillHeight - radius);
+      ctx.quadraticCurveTo(pillX + pillWidth, pillY + pillHeight, pillX + pillWidth - radius, pillY + pillHeight);
+      ctx.lineTo(pillX + radius, pillY + pillHeight);
+      ctx.quadraticCurveTo(pillX, pillY + pillHeight, pillX, pillY + pillHeight - radius);
+      ctx.lineTo(pillX, pillY + radius);
+      ctx.quadraticCurveTo(pillX, pillY, pillX + radius, pillY);
+      ctx.closePath();
       ctx.fill();
 
-      // Name tag
-      ctx.font = `${11 / zoom}px sans-serif`;
-      ctx.fillStyle = '#0f172a';
-      ctx.fillText(c.userName, c.x + 10 / zoom, c.y - 6 / zoom);
+      // Thin white border around pill
+      ctx.shadowColor = 'transparent';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1 * s;
+      ctx.stroke();
+
+      // Text inside pill
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelText, pillX + paddingX, pillY + pillHeight / 2);
+
+      // If active drawing, draw an animated pulsing ring around cursor tip
+      if (c.isDrawing) {
+        const pulse = (Math.sin(Date.now() / 140) + 1) / 2;
+        ctx.strokeStyle = c.color || '#3b82f6';
+        ctx.lineWidth = 2 * s;
+        ctx.beginPath();
+        ctx.arc(cx, cy, (5 + pulse * 4) * s, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // If laser pointer tool
+      if (c.tool === 'laser') {
+        ctx.fillStyle = '#ef4444';
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 12 * s;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       ctx.restore();
     }
 
@@ -471,6 +574,9 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     const worldPoint = screenToWorld(e.clientX, e.clientY);
+
+    // Broadcast pointer down / drawing cursor to collaborators
+    onCursorMove?.(worldPoint, true);
 
     // If canvas is read-only (e.g. student in view-only mode), only panning is allowed
     if (readOnly) {
@@ -598,6 +704,9 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const worldPoint = screenToWorld(e.clientX, e.clientY);
 
+    // Broadcast cursor position in real-time to other users on the whiteboard
+    onCursorMove?.(worldPoint, isPointerDown);
+
     // Pan dragging
     if (isPanning.current) {
       onPanChange({
@@ -646,9 +755,27 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     }
   };
 
+  // Pointer Leave Canvas
+  const handlePointerLeave = () => {
+    if (isPanning.current) {
+      isPanning.current = false;
+    }
+    if (isPointerDown) {
+      setIsPointerDown(false);
+    }
+    onCursorLeave?.();
+  };
+
   // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    const worldPoint = screenToWorld(e.clientX, e.clientY);
+    onCursorMove?.(worldPoint, false);
 
     if (isPanning.current) {
       isPanning.current = false;
@@ -657,8 +784,6 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
     if (!isPointerDown) return;
     setIsPointerDown(false);
-
-    const worldPoint = screenToWorld(e.clientX, e.clientY);
 
     if (currentTool === 'select') {
       draggingObjectId.current = null;
@@ -793,6 +918,7 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
         className={`w-full h-full touch-none block ${

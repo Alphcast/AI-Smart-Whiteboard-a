@@ -47,13 +47,14 @@ app.use((req, res, next) => {
 
 // 2. Vercel Serverless Rewrites Path Normalizer
 app.use((req, res, next) => {
-  if (req.query && req.query.__path) {
-    const rawPath = Array.isArray(req.query.__path)
-      ? req.query.__path.join('/')
-      : req.query.__path;
+  if (req.query && (req.query as any).__path) {
+    const rawPath = Array.isArray((req.query as any).__path)
+      ? (req.query as any).__path.join('/')
+      : (req.query as any).__path;
     const cleanPath = String(rawPath).startsWith('/') ? String(rawPath) : `/${rawPath}`;
+    delete (req.query as any).__path;
 
-    const urlParts = req.url.split('?');
+    const urlParts = (req.url || '').split('?');
     let search = '';
     if (urlParts.length > 1) {
       const params = new URLSearchParams(urlParts[1]);
@@ -64,17 +65,26 @@ app.use((req, res, next) => {
 
     if (cleanPath.startsWith('/socket.io')) {
       req.url = `${cleanPath}${search}`;
+    } else if (cleanPath.startsWith('/api')) {
+      req.url = `${cleanPath}${search}`;
     } else {
       req.url = `/api${cleanPath}${search}`;
     }
-  } else {
-    const matchedPath =
-      req.headers['x-matched-path'] ||
-      req.headers['x-vercel-matched-path'] ||
-      req.headers['x-now-route-matches'] ||
-      req.headers['x-invoke-path'];
-    if (matchedPath && typeof matchedPath === 'string' && (matchedPath.startsWith('/api/') || matchedPath.startsWith('/socket.io/'))) {
-      req.url = matchedPath;
+  } else if (req.query && (req.query as any).all) {
+    const allParts = Array.isArray((req.query as any).all)
+      ? (req.query as any).all.join('/')
+      : (req.query as any).all;
+    delete (req.query as any).all;
+    const cleanAll = String(allParts).startsWith('/') ? String(allParts) : `/${allParts}`;
+    const urlParts = (req.url || '').split('?');
+    const search = urlParts.length > 1 ? `?${urlParts.slice(1).join('?')}` : '';
+
+    if (cleanAll.startsWith('/socket.io')) {
+      req.url = `${cleanAll}${search}`;
+    } else if (cleanAll.startsWith('/api')) {
+      req.url = `${cleanAll}${search}`;
+    } else {
+      req.url = `/api${cleanAll}${search}`;
     }
   }
   next();
@@ -126,6 +136,41 @@ try {
   console.warn('Notice: Local data dir not writable, using memory storage:', err);
 }
 
+// Helpers to load seed datasets across local and Vercel serverless environments
+function findInitialDataFile(fileName: string): string | null {
+  const candidates = [
+    path.join(DATA_DIR, fileName),
+    path.join(__dirname, '.data', fileName),
+    path.join(process.cwd(), '.data', fileName),
+    path.join(__dirname, '..', '.data', fileName),
+    path.join('/var/task', '.data', fileName),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function readDataFile(fileName: string): any[] | null {
+  const target = findInitialDataFile(fileName);
+  if (target) {
+    try {
+      const raw = fs.readFileSync(target, 'utf-8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) return list;
+    } catch (err) {
+      console.warn(`Failed reading ${fileName} from ${target}:`, err);
+    }
+  }
+  return null;
+}
+
 // In-Memory Database with Disk Persistence
 interface StoredBoard {
   id: string;
@@ -144,16 +189,9 @@ interface StoredBoard {
 let boardsMap = new Map<string, StoredBoard>();
 
 function loadBoardsFromDisk() {
-  if (fs.existsSync(BOARDS_FILE)) {
-    try {
-      const raw = fs.readFileSync(BOARDS_FILE, 'utf-8');
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((b: StoredBoard) => boardsMap.set(b.id, b));
-      }
-    } catch (err) {
-      console.error('Failed to parse boards.json:', err);
-    }
+  const list = readDataFile('boards.json');
+  if (list && Array.isArray(list)) {
+    list.forEach((b: StoredBoard) => boardsMap.set(b.id, b));
   }
 
   // Seed default demo boards if empty
@@ -335,16 +373,9 @@ const studentNotesMap = new Map<string, StoredStudentNote>();
 const activeLessonParticipants = new Map<string, Map<string, any>>();
 
 function loadSubjectsFromDisk() {
-  if (fs.existsSync(SUBJECTS_FILE)) {
-    try {
-      const raw = fs.readFileSync(SUBJECTS_FILE, 'utf-8');
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((s: StoredSubject) => subjectsMap.set(s.id, s));
-      }
-    } catch (err) {
-      console.error('Failed to parse subjects.json:', err);
-    }
+  const list = readDataFile('subjects.json');
+  if (list && Array.isArray(list)) {
+    list.forEach((s: StoredSubject) => subjectsMap.set(s.id, s));
   }
 
   // Pre-seed default core subjects
@@ -366,24 +397,20 @@ function loadSubjectsFromDisk() {
 
 function saveSubjectsToDisk() {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     const list = Array.from(subjectsMap.values());
     fs.writeFileSync(SUBJECTS_FILE, JSON.stringify(list, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Failed to save subjects.json:', err);
+    console.warn('Notice: Failed to save subjects.json (in-memory preserved):', err);
   }
 }
 
 function loadLessonsFromDisk() {
-  if (fs.existsSync(LESSONS_FILE)) {
-    try {
-      const raw = fs.readFileSync(LESSONS_FILE, 'utf-8');
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((l: StoredLesson) => lessonsMap.set(l.id, l));
-      }
-    } catch (err) {
-      console.error('Failed to parse lessons.json:', err);
-    }
+  const list = readDataFile('lessons.json');
+  if (list && Array.isArray(list)) {
+    list.forEach((l: StoredLesson) => lessonsMap.set(l.id, l));
   }
 
   // Pre-seed initial active lesson tied to the demo board
@@ -446,24 +473,20 @@ function loadLessonsFromDisk() {
 
 function saveLessonsToDisk() {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     const list = Array.from(lessonsMap.values());
     fs.writeFileSync(LESSONS_FILE, JSON.stringify(list, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Failed to save lessons.json:', err);
+    console.warn('Notice: Failed to save lessons.json (in-memory preserved):', err);
   }
 }
 
 function loadNotesFromDisk() {
-  if (fs.existsSync(NOTES_FILE)) {
-    try {
-      const raw = fs.readFileSync(NOTES_FILE, 'utf-8');
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((n: StoredStudentNote) => studentNotesMap.set(n.id, n));
-      }
-    } catch (err) {
-      console.error('Failed to parse student_notes.json:', err);
-    }
+  const list = readDataFile('student_notes.json');
+  if (list && Array.isArray(list)) {
+    list.forEach((n: StoredStudentNote) => studentNotesMap.set(n.id, n));
   }
 
   // Pre-seed sample student note for algebra masterclass
@@ -494,10 +517,13 @@ function loadNotesFromDisk() {
 
 function saveNotesToDisk() {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     const list = Array.from(studentNotesMap.values());
     fs.writeFileSync(NOTES_FILE, JSON.stringify(list, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Failed to save student_notes.json:', err);
+    console.warn('Notice: Failed to save student_notes.json (in-memory preserved):', err);
   }
 }
 
@@ -527,34 +553,30 @@ interface ActiveRemoteSession {
 const remoteSessions = new Map<string, ActiveRemoteSession>();
 
 function loadSessionsFromDisk() {
-  if (fs.existsSync(SESSIONS_FILE)) {
-    try {
-      const raw = fs.readFileSync(SESSIONS_FILE, 'utf-8');
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((s: any) => {
-          if (!remoteSessions.has(s.sessionId)) {
-            remoteSessions.set(s.sessionId, {
-              sessionId: s.sessionId,
-              boardId: s.boardId,
-              passcode: s.passcode,
-              createdAt: s.createdAt || Date.now(),
-              lastActive: s.lastActive || Date.now(),
-              displaySockets: new Set(),
-              controllerSockets: new Set(),
-              eventBuffer: s.eventBuffer || [],
-            });
-          }
+  const list = readDataFile('sessions.json');
+  if (list && Array.isArray(list)) {
+    list.forEach((s: any) => {
+      if (!remoteSessions.has(s.sessionId)) {
+        remoteSessions.set(s.sessionId, {
+          sessionId: s.sessionId,
+          boardId: s.boardId,
+          passcode: s.passcode,
+          createdAt: s.createdAt || Date.now(),
+          lastActive: s.lastActive || Date.now(),
+          displaySockets: new Set(),
+          controllerSockets: new Set(),
+          eventBuffer: s.eventBuffer || [],
         });
       }
-    } catch {
-      // ignore
-    }
+    });
   }
 }
 
 function saveSessionsToDisk() {
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     const list = Array.from(remoteSessions.values()).map((s) => ({
       sessionId: s.sessionId,
       boardId: s.boardId,
@@ -1830,7 +1852,7 @@ app.get('/api/remote/sessions/:sessionId', (req, res) => {
 wss.on('connection', (ws: WebSocket, req) => {
   let boundBoardId: string | null = null;
   let boundSessionId: string | null = null;
-  let userMeta: { userId: string; userName: string; color: string } | null = null;
+  let userMeta: { userId: string; userName: string; color: string; role?: 'teacher' | 'student' } | null = null;
   let clientRole: 'controller' | 'display' | 'collaborator' | null = null;
 
   ws.on('message', (messageRaw: string) => {
@@ -1844,6 +1866,7 @@ wss.on('connection', (ws: WebSocket, req) => {
           userId: data.userId || `user-${Math.random().toString(36).substring(2, 6)}`,
           userName: data.userName || 'Collaborator',
           color: data.color || '#3b82f6',
+          role: data.role || 'teacher',
         };
         clientRole = 'collaborator';
 
@@ -1866,9 +1889,13 @@ wss.on('connection', (ws: WebSocket, req) => {
       else if (data.type === 'board:cursor' && boundBoardId) {
         broadcastToBoard(boundBoardId, ws, {
           type: 'board:cursor',
-          userId: userMeta?.userId,
-          userName: userMeta?.userName,
-          color: userMeta?.color,
+          userId: data.userId || userMeta?.userId,
+          userName: data.userName || userMeta?.userName || 'Collaborator',
+          color: data.color || userMeta?.color || '#3b82f6',
+          role: data.role || userMeta?.role,
+          tool: data.tool,
+          isDrawing: Boolean(data.isDrawing),
+          isOffCanvas: Boolean(data.isOffCanvas),
           x: data.x,
           y: data.y,
         });
@@ -2162,21 +2189,23 @@ io.on('connection', (socket) => {
 
   // Real-time cursor & objects
   socket.on('board:cursor', (data: any) => {
+    const cursorPayload = {
+      userId: data?.userId || userMeta?.userId || socket.id,
+      userName: data?.userName || userMeta?.userName || 'Collaborator',
+      color: data?.color || userMeta?.color || '#3b82f6',
+      role: data?.role || userMeta?.role,
+      x: data?.x,
+      y: data?.y,
+      isDrawing: Boolean(data?.isDrawing),
+      isOffCanvas: Boolean(data?.isOffCanvas),
+      tool: data?.tool,
+      timestamp: Date.now(),
+    };
     if (boundBoardId) {
-      socket.to(`board:${boundBoardId}`).emit('board:cursor', {
-        userId: userMeta?.userId,
-        userName: userMeta?.userName,
-        color: userMeta?.color,
-        ...data,
-      });
+      socket.to(`board:${boundBoardId}`).emit('board:cursor', cursorPayload);
     }
     if (boundLessonId) {
-      socket.to(`lesson:${boundLessonId}`).emit('lesson:cursor', {
-        userId: userMeta?.userId,
-        userName: userMeta?.userName,
-        color: userMeta?.color,
-        ...data,
-      });
+      socket.to(`lesson:${boundLessonId}`).emit('lesson:cursor', cursorPayload);
     }
   });
 
@@ -2450,6 +2479,12 @@ io.on('connection', (socket) => {
 
   // Disconnect handler
   socket.on('disconnect', () => {
+    if (boundBoardId && userMeta?.userId) {
+      socket.to(`board:${boundBoardId}`).emit('collaborator:left', {
+        userId: userMeta.userId,
+      });
+    }
+
     if (boundLessonId && userMeta?.userId) {
       const participants = activeLessonParticipants.get(boundLessonId);
       if (participants) {
