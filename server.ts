@@ -1178,14 +1178,26 @@ app.delete('/api/lessons/:id', (req, res) => {
 });
 
 // ================= INDIVIDUAL STUDENT LEARNING NOTES API =================
-// Get note for a student in a specific lesson
+// Get note for a student in a specific lesson (enforces private note ownership)
 app.get('/api/lessons/:id/notes', (req, res) => {
   loadNotesFromDisk();
   const lessonId = req.params.id;
-  const studentId = (req.query.studentId as string) || 'student-demo';
+  const authUserId = (req.headers['x-user-id'] as string) || (req.query.studentId as string) || 'student-demo';
+  const requestedStudentId = (req.query.studentId as string) || authUserId;
+
+  const lesson = lessonsMap.get(lessonId);
+  const isTeacher = lesson && (authUserId === lesson.teacherId || authUserId === 'teacher-primary');
+
+  // Strict privacy enforcement: Students cannot read another student's private notes
+  if (authUserId !== requestedStudentId && !isTeacher) {
+    return res.status(403).json({
+      success: false,
+      error: { message: "Forbidden: You cannot access another student's private notes" },
+    });
+  }
 
   const notesList = Array.from(studentNotesMap.values()).filter(
-    (n) => n.lessonId === lessonId && n.studentId === studentId
+    (n) => n.lessonId === lessonId && n.studentId === requestedStudentId
   );
 
   const note = notesList.length > 0 ? notesList[0] : null;
@@ -1196,23 +1208,45 @@ app.get('/api/lessons/:id/notes', (req, res) => {
 app.post('/api/lessons/:id/notes', (req, res) => {
   loadNotesFromDisk();
   const lessonId = req.params.id;
+  const authUserId = (req.headers['x-user-id'] as string) || req.body.studentId || 'student-demo';
+  const targetStudentId = req.body.studentId || authUserId;
+
+  // Strict privacy enforcement: Students cannot modify or create notes under another student's account
+  if (authUserId !== targetStudentId && authUserId !== 'teacher-primary') {
+    return res.status(403).json({
+      success: false,
+      error: { message: 'Forbidden: Cannot create or modify notes on behalf of another student' },
+    });
+  }
+
   const {
-    studentId = 'student-demo',
     studentName = 'Alex Student',
     title,
     content = '',
     keyTakeaways = [],
-    version = 1,
+    version,
   } = req.body;
 
   const lesson = lessonsMap.get(lessonId);
 
   // Check if student already has a note for this lesson
   let existing = Array.from(studentNotesMap.values()).find(
-    (n) => n.lessonId === lessonId && n.studentId === studentId
+    (n) => n.lessonId === lessonId && n.studentId === targetStudentId
   );
 
   if (existing) {
+    // Optimistic concurrency check: guard against out-of-order stale updates overwriting newer content
+    if (typeof version === 'number' && version < existing.version) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          message: 'Conflict: Newer note version already exists on server',
+          code: 'CONCURRENCY_CONFLICT',
+        },
+        data: existing,
+      });
+    }
+
     existing.content = content;
     if (title) existing.title = title;
     if (keyTakeaways) existing.keyTakeaways = keyTakeaways;
@@ -1220,11 +1254,11 @@ app.post('/api/lessons/:id/notes', (req, res) => {
     existing.updatedAt = new Date().toISOString();
     studentNotesMap.set(existing.id, existing);
   } else {
-    const noteId = `note-${Date.now()}-${studentId}`;
+    const noteId = `note-${Date.now()}-${targetStudentId}`;
     existing = {
       id: noteId,
       lessonId,
-      studentId,
+      studentId: targetStudentId,
       studentName,
       subject: lesson?.subject || 'General Study',
       topic: lesson?.topic || 'Lesson Notes',
@@ -1240,7 +1274,6 @@ app.post('/api/lessons/:id/notes', (req, res) => {
   }
 
   saveNotesToDisk();
-
   res.json({ success: true, data: existing });
 });
 
@@ -1248,6 +1281,16 @@ app.post('/api/lessons/:id/notes', (req, res) => {
 app.get('/api/students/:studentId/notes', (req, res) => {
   loadNotesFromDisk();
   const studentId = req.params.studentId;
+  const authUserId = (req.headers['x-user-id'] as string) || studentId;
+
+  // Strict privacy enforcement: Students cannot enumerate another student's personal notes
+  if (authUserId !== studentId && authUserId !== 'teacher-primary') {
+    return res.status(403).json({
+      success: false,
+      error: { message: "Forbidden: You cannot enumerate another student's private notebook" },
+    });
+  }
+
   const notes = Array.from(studentNotesMap.values())
     .filter((n) => n.studentId === studentId)
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -1255,16 +1298,27 @@ app.get('/api/students/:studentId/notes', (req, res) => {
   res.json({ success: true, data: notes });
 });
 
-// Delete a note
+// Delete a note (enforces note ownership)
 app.delete('/api/lessons/:id/notes/:noteId', (req, res) => {
   loadNotesFromDisk();
   const noteId = req.params.noteId;
-  if (studentNotesMap.has(noteId)) {
-    studentNotesMap.delete(noteId);
-    saveNotesToDisk();
-    return res.json({ success: true, message: 'Note deleted' });
+  const authUserId = (req.headers['x-user-id'] as string) || (req.query.studentId as string) || 'student-demo';
+
+  const note = studentNotesMap.get(noteId);
+  if (!note) {
+    return res.status(404).json({ success: false, error: { message: 'Note not found' } });
   }
-  res.status(404).json({ success: false, error: { message: 'Note not found' } });
+
+  if (note.studentId !== authUserId && authUserId !== 'teacher-primary') {
+    return res.status(403).json({
+      success: false,
+      error: { message: 'Forbidden: Cannot delete note belonging to another student' },
+    });
+  }
+
+  studentNotesMap.delete(noteId);
+  saveNotesToDisk();
+  res.json({ success: true, message: 'Note deleted successfully' });
 });
 
 // ================= AI LESSON PEDAGOGY & SUMMARY API =================
@@ -1955,10 +2009,41 @@ function broadcastToBoard(boardId: string, senderWs: WebSocket | null, payload: 
 io.on('connection', (socket) => {
   let boundBoardId: string | null = null;
   let boundSessionId: string | null = null;
-  let userMeta: { userId: string; userName: string; color: string } | null = null;
+  let userMeta: {
+    userId: string;
+    userName: string;
+    color: string;
+    role?: 'teacher' | 'student';
+    canEditBoard?: boolean;
+  } | null = null;
   let clientRole: 'controller' | 'display' | 'collaborator' | null = null;
 
   let boundLessonId: string | null = null;
+
+  // Helper to verify whether current socket is authorized to edit whiteboard
+  function isSocketAllowedToEdit(): boolean {
+    if (!boundLessonId) return true; // Standalone boards (non-lesson) allow editing
+    const lesson = lessonsMap.get(boundLessonId);
+    if (!lesson) return true;
+    if (userMeta?.role === 'teacher') return true;
+
+    // Check live participant record
+    if (userMeta?.userId) {
+      const participants = activeLessonParticipants.get(boundLessonId);
+      const participant = participants?.get(userMeta.userId);
+      if (participant && typeof participant.canEditBoard === 'boolean') {
+        return participant.canEditBoard;
+      }
+    }
+
+    if (lesson.collaborationMode === 'teacher_only' || lesson.collaborationMode === 'students_view_only') {
+      return false;
+    }
+    if (lesson.studentPermissions && userMeta?.userId && lesson.studentPermissions[userMeta.userId] !== undefined) {
+      return lesson.studentPermissions[userMeta.userId];
+    }
+    return lesson.collaborationMode === 'everyone_can_edit';
+  }
 
   // 1. Join Whiteboard Collaboration Room
   socket.on('board:join', (data: any) => {
@@ -1968,6 +2053,8 @@ io.on('connection', (socket) => {
       userId: data.userId || `user-${Math.random().toString(36).substring(2, 6)}`,
       userName: data.userName || 'Collaborator',
       color: data.color || '#3b82f6',
+      role: data.role || 'teacher',
+      canEditBoard: true,
     };
     clientRole = 'collaborator';
     socket.join(`board:${boundBoardId}`);
@@ -1993,15 +2080,6 @@ io.on('connection', (socket) => {
 
     boundLessonId = lessonId;
     boundBoardId = lesson.boardId;
-    userMeta = {
-      userId: userId || `user-${Math.random().toString(36).substring(2, 6)}`,
-      userName: userName || (role === 'teacher' ? 'Teacher' : 'Student'),
-      color: color || (role === 'teacher' ? '#2563eb' : '#10b981'),
-    };
-    clientRole = 'collaborator';
-
-    socket.join(`lesson:${lessonId}`);
-    socket.join(`board:${lesson.boardId}`);
 
     // Calculate edit permission
     let canEditBoard = true;
@@ -2009,10 +2087,22 @@ io.on('connection', (socket) => {
       if (lesson.collaborationMode === 'teacher_only' || lesson.collaborationMode === 'students_view_only') {
         canEditBoard = false;
       }
-      if (lesson.studentPermissions && lesson.studentPermissions[userMeta.userId] !== undefined) {
-        canEditBoard = lesson.studentPermissions[userMeta.userId];
+      if (lesson.studentPermissions && userId && lesson.studentPermissions[userId] !== undefined) {
+        canEditBoard = lesson.studentPermissions[userId];
       }
     }
+
+    userMeta = {
+      userId: userId || `user-${Math.random().toString(36).substring(2, 6)}`,
+      userName: userName || (role === 'teacher' ? 'Teacher' : 'Student'),
+      color: color || (role === 'teacher' ? '#2563eb' : '#10b981'),
+      role,
+      canEditBoard,
+    };
+    clientRole = 'collaborator';
+
+    socket.join(`lesson:${lessonId}`);
+    socket.join(`board:${lesson.boardId}`);
 
     // Register active participant in lesson
     if (!activeLessonParticipants.has(lessonId)) {
@@ -2068,63 +2158,97 @@ io.on('connection', (socket) => {
   });
 
   socket.on('board:object_create', (data: any) => {
-    if (boundBoardId && data?.pageId && data?.object) {
-      // Authoritative in-memory board sync
-      const b = boardsMap.get(boundBoardId);
-      if (b) {
-        if (!b.objects) b.objects = {};
-        if (!b.objects[data.pageId]) b.objects[data.pageId] = [];
-        // Guard against duplicate IDs
-        const existingIdx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
-        if (existingIdx === -1) {
-          b.objects[data.pageId].push(data.object);
-        } else {
-          b.objects[data.pageId][existingIdx] = data.object;
-        }
-        b.updatedAt = new Date().toISOString();
-        saveBoardsToDisk();
-      }
-      socket.to(`board:${boundBoardId}`).emit('board:object_create', data);
+    if (!boundBoardId || !data?.pageId || !data?.object) return;
+
+    // Server-enforced authorization check: reject edit if user has read-only access
+    if (!isSocketAllowedToEdit()) {
+      socket.emit('board:permission_denied', {
+        action: 'create',
+        message: 'Whiteboard is currently in view-only mode for students.',
+      });
+      return;
     }
+
+    // Authoritative in-memory board sync
+    const b = boardsMap.get(boundBoardId);
+    if (b) {
+      if (!b.objects) b.objects = {};
+      if (!b.objects[data.pageId]) b.objects[data.pageId] = [];
+      // Guard against duplicate IDs
+      const existingIdx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
+      if (existingIdx === -1) {
+        b.objects[data.pageId].push(data.object);
+      } else {
+        b.objects[data.pageId][existingIdx] = data.object;
+      }
+      b.updatedAt = new Date().toISOString();
+      saveBoardsToDisk();
+    }
+    socket.to(`board:${boundBoardId}`).emit('board:object_create', data);
   });
 
   socket.on('board:object_update', (data: any) => {
-    if (boundBoardId && data?.pageId && data?.object) {
-      const b = boardsMap.get(boundBoardId);
-      if (b && b.objects && b.objects[data.pageId]) {
-        const idx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
-        if (idx !== -1) {
-          b.objects[data.pageId][idx] = data.object;
-          b.updatedAt = new Date().toISOString();
-          saveBoardsToDisk();
-        }
-      }
-      socket.to(`board:${boundBoardId}`).emit('board:object_update', data);
+    if (!boundBoardId || !data?.pageId || !data?.object) return;
+
+    if (!isSocketAllowedToEdit()) {
+      socket.emit('board:permission_denied', {
+        action: 'update',
+        message: 'Whiteboard is currently in view-only mode for students.',
+      });
+      return;
     }
+
+    const b = boardsMap.get(boundBoardId);
+    if (b && b.objects && b.objects[data.pageId]) {
+      const idx = b.objects[data.pageId].findIndex((o: any) => o.id === data.object.id);
+      if (idx !== -1) {
+        b.objects[data.pageId][idx] = data.object;
+        b.updatedAt = new Date().toISOString();
+        saveBoardsToDisk();
+      }
+    }
+    socket.to(`board:${boundBoardId}`).emit('board:object_update', data);
   });
 
   socket.on('board:object_delete', (data: any) => {
-    if (boundBoardId && data?.pageId && data?.objectId) {
-      const b = boardsMap.get(boundBoardId);
-      if (b && b.objects && b.objects[data.pageId]) {
-        b.objects[data.pageId] = b.objects[data.pageId].filter((o: any) => o.id !== data.objectId);
-        b.updatedAt = new Date().toISOString();
-        saveBoardsToDisk();
-      }
-      socket.to(`board:${boundBoardId}`).emit('board:object_delete', data);
+    if (!boundBoardId || !data?.pageId || !data?.objectId) return;
+
+    if (!isSocketAllowedToEdit()) {
+      socket.emit('board:permission_denied', {
+        action: 'delete',
+        message: 'Whiteboard is currently in view-only mode for students.',
+      });
+      return;
     }
+
+    const b = boardsMap.get(boundBoardId);
+    if (b && b.objects && b.objects[data.pageId]) {
+      b.objects[data.pageId] = b.objects[data.pageId].filter((o: any) => o.id !== data.objectId);
+      b.updatedAt = new Date().toISOString();
+      saveBoardsToDisk();
+    }
+    socket.to(`board:${boundBoardId}`).emit('board:object_delete', data);
   });
 
   socket.on('board:clear', (data: any) => {
-    if (boundBoardId && data?.pageId) {
-      const b = boardsMap.get(boundBoardId);
-      if (b && b.objects) {
-        b.objects[data.pageId] = [];
-        b.updatedAt = new Date().toISOString();
-        saveBoardsToDisk();
-      }
-      socket.to(`board:${boundBoardId}`).emit('board:clear', data);
+    if (!boundBoardId || !data?.pageId) return;
+
+    // Only teacher can clear a classroom whiteboard
+    if (boundLessonId && userMeta?.role !== 'teacher') {
+      socket.emit('board:permission_denied', {
+        action: 'clear',
+        message: 'Only the teacher can clear the classroom whiteboard.',
+      });
+      return;
     }
+
+    const b = boardsMap.get(boundBoardId);
+    if (b && b.objects) {
+      b.objects[data.pageId] = [];
+      b.updatedAt = new Date().toISOString();
+      saveBoardsToDisk();
+    }
+    socket.to(`board:${boundBoardId}`).emit('board:clear', data);
   });
 
   socket.on('board:page_change', (data: any) => {

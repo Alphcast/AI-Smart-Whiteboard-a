@@ -19,11 +19,20 @@ export const CreateLessonModal: React.FC<CreateLessonModalProps> = ({
   onClose,
   onLessonCreated,
 }) => {
+  const getLocalDateString = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [subject, setSubject] = useState<string>('Mathematics');
+  const [customSubjectName, setCustomSubjectName] = useState<string>('');
   const [topic, setTopic] = useState<string>('');
   const [description, setDescription] = useState<string>('');
-  const [lessonDate, setLessonDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [lessonDate, setLessonDate] = useState<string>(getLocalDateString);
   const [scheduledTime, setScheduledTime] = useState<string>('10:00');
   const [status, setStatus] = useState<'scheduled' | 'active'>('active');
   const [collaborationMode, setCollaborationMode] = useState<CollaborationMode>('everyone_can_edit');
@@ -67,12 +76,26 @@ export const CreateLessonModal: React.FC<CreateLessonModalProps> = ({
       return;
     }
 
+    let finalSubject = subject;
+    if (subject === 'Custom Subject') {
+      if (!customSubjectName.trim()) {
+        setError('Please enter a name for the custom subject.');
+        return;
+      }
+      finalSubject = customSubjectName.trim();
+      try {
+        await api.createSubject({ name: finalSubject, color: '#4f46e5', icon: '🎓' });
+      } catch {
+        // fallback
+      }
+    }
+
     setSubmitting(true);
     setError(null);
     try {
       const scheduledAt = new Date(`${lessonDate}T${scheduledTime || '10:00'}:00`).toISOString();
       const newLesson = await api.createLesson({
-        subject,
+        subject: finalSubject,
         topic: topic.trim(),
         description: description.trim(),
         learningObjectives,
@@ -139,6 +162,16 @@ export const CreateLessonModal: React.FC<CreateLessonModalProps> = ({
                 ))}
                 <option value="Custom Subject">+ Other Subject</option>
               </select>
+              {subject === 'Custom Subject' && (
+                <input
+                  type="text"
+                  required
+                  value={customSubjectName}
+                  onChange={(e) => setCustomSubjectName(e.target.value)}
+                  placeholder="Enter new subject name..."
+                  className="mt-2 w-full px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              )}
             </div>
 
             <div>

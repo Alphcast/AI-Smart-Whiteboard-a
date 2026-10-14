@@ -24,6 +24,7 @@ import {
   Trash2,
   ChevronRight,
   Download,
+  Lock,
 } from 'lucide-react';
 import { ToolType } from '../../types/whiteboard';
 
@@ -58,10 +59,20 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
   return (
     <div className="flex flex-col items-center bg-white/95 backdrop-blur-sm border border-slate-200 shadow-md rounded-xl p-1.5 gap-1 select-none">
+      {/* Read-Only Lock Indicator */}
+      {readOnly && (
+        <div
+          className="w-full py-1 px-1 rounded-lg bg-amber-100 text-amber-800 text-[10px] font-bold flex items-center justify-center gap-1 mb-0.5 border border-amber-200"
+          title="Whiteboard editing is locked (View-Only Mode)"
+        >
+          <Lock className="w-3.5 h-3.5" />
+        </div>
+      )}
+
       {/* Select */}
       <button
         onClick={() => setTool('select')}
-        className={`p-2.5 rounded-lg transition-colors relative group ${
+        className={`p-2.5 rounded-lg transition-colors relative group cursor-pointer ${
           currentTool === 'select' ? 'bg-blue-50 text-blue-600 font-semibold' : 'text-slate-700 hover:bg-slate-100'
         }`}
         title="Select & Move (V)"
@@ -72,7 +83,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Pan */}
       <button
         onClick={() => setTool('pan')}
-        className={`p-2.5 rounded-lg transition-colors ${
+        className={`p-2.5 rounded-lg transition-colors cursor-pointer ${
           currentTool === 'pan' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
         }`}
         title="Pan Canvas (H / Space+Drag)"
@@ -84,44 +95,64 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
       {/* Pen */}
       <button
-        onClick={() => setTool('pen')}
+        onClick={() => !readOnly && setTool('pen')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'pen' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'pen'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Smooth Pen (P)"
+        title={readOnly ? 'Drawing locked (View-Only)' : 'Smooth Pen (P)'}
       >
         <Pen className="w-5 h-5" />
       </button>
 
       {/* Pencil */}
       <button
-        onClick={() => setTool('pencil')}
+        onClick={() => !readOnly && setTool('pencil')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'pencil' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'pencil'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Pencil (Fine lines)"
+        title={readOnly ? 'Drawing locked (View-Only)' : 'Pencil (Fine lines)'}
       >
         <Pencil className="w-5 h-5" />
       </button>
 
       {/* Highlighter */}
       <button
-        onClick={() => setTool('highlighter')}
+        onClick={() => !readOnly && setTool('highlighter')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'highlighter' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'highlighter'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Highlighter (Semi-transparent)"
+        title={readOnly ? 'Drawing locked (View-Only)' : 'Highlighter (Semi-transparent)'}
       >
         <Highlighter className="w-5 h-5" />
       </button>
 
       {/* Eraser */}
       <button
-        onClick={() => setTool('eraser')}
+        onClick={() => !readOnly && setTool('eraser')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'eraser' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'eraser'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Eraser (E)"
+        title={readOnly ? 'Eraser locked (View-Only)' : 'Eraser (E)'}
       >
         <Eraser className="w-5 h-5" />
       </button>
@@ -130,11 +161,16 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
       {/* Text */}
       <button
-        onClick={() => setTool('text')}
+        onClick={() => !readOnly && setTool('text')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'text' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'text'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Text (T)"
+        title={readOnly ? 'Text locked (View-Only)' : 'Text (T)'}
       >
         <Type className="w-5 h-5" />
       </button>
@@ -142,13 +178,19 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Equation Tool */}
       <button
         onClick={() => {
+          if (readOnly) return;
           setTool('equation');
           if (onRecognizeEquation) onRecognizeEquation();
         }}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors relative ${
-          currentTool === 'equation' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'equation'
+            ? 'bg-blue-600 text-white shadow-sm cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Equation Tool: write math or recognize equation"
+        title={readOnly ? 'Equation tool locked (View-Only)' : 'Equation Tool: write math or recognize equation'}
       >
         <Sigma className="w-5 h-5" />
       </button>
@@ -156,11 +198,16 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Shapes Dropdown / Flyout */}
       <div className="relative">
         <button
-          onClick={() => setShapesMenuOpen(!shapesMenuOpen)}
+          onClick={() => !readOnly && setShapesMenuOpen(!shapesMenuOpen)}
+          disabled={readOnly}
           className={`p-2.5 rounded-lg transition-colors flex items-center justify-center relative ${
-            isShapeActive ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+            readOnly
+              ? 'opacity-35 cursor-not-allowed text-slate-400'
+              : isShapeActive
+              ? 'bg-blue-50 text-blue-600 cursor-pointer'
+              : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
           }`}
-          title="Shapes (Rectangle, Circle, Triangle, Line, Arrow)"
+          title={readOnly ? 'Shapes locked (View-Only)' : 'Shapes (Rectangle, Circle, Triangle, Line, Arrow)'}
         >
           {currentTool === 'rectangle' ? (
             <Square className="w-5 h-5" />
@@ -178,14 +225,14 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
           <ChevronRight className="w-2.5 h-2.5 absolute bottom-1 right-0.5 opacity-60" />
         </button>
 
-        {shapesMenuOpen && (
+        {shapesMenuOpen && !readOnly && (
           <div className="absolute left-full top-0 ml-2 bg-white border border-slate-200 shadow-lg rounded-xl p-1 flex flex-col gap-1 z-50">
             <button
               onClick={() => {
                 setTool('rectangle');
                 setShapesMenuOpen(false);
               }}
-              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium ${
+              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium cursor-pointer ${
                 currentTool === 'rectangle' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
@@ -196,7 +243,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 setTool('circle');
                 setShapesMenuOpen(false);
               }}
-              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium ${
+              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium cursor-pointer ${
                 currentTool === 'circle' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
@@ -207,7 +254,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 setTool('triangle');
                 setShapesMenuOpen(false);
               }}
-              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium ${
+              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium cursor-pointer ${
                 currentTool === 'triangle' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
@@ -218,7 +265,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 setTool('line');
                 setShapesMenuOpen(false);
               }}
-              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium ${
+              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium cursor-pointer ${
                 currentTool === 'line' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
@@ -229,7 +276,7 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
                 setTool('arrow');
                 setShapesMenuOpen(false);
               }}
-              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium ${
+              className={`p-2 rounded-lg flex items-center gap-2 text-xs font-medium cursor-pointer ${
                 currentTool === 'arrow' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
@@ -241,11 +288,16 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
 
       {/* Sticky Note */}
       <button
-        onClick={() => setTool('sticky')}
+        onClick={() => !readOnly && setTool('sticky')}
+        disabled={readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          currentTool === 'sticky' ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-100'
+          readOnly
+            ? 'opacity-35 cursor-not-allowed text-slate-400'
+            : currentTool === 'sticky'
+            ? 'bg-blue-50 text-blue-600 cursor-pointer'
+            : 'text-slate-700 hover:bg-slate-100 cursor-pointer'
         }`}
-        title="Sticky Note (N)"
+        title={readOnly ? 'Sticky notes locked (View-Only)' : 'Sticky Note (N)'}
       >
         <StickyNote className="w-5 h-5" />
       </button>
@@ -255,9 +307,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Undo */}
       <button
         onClick={onUndo}
-        disabled={!canUndo}
+        disabled={!canUndo || readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          canUndo ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-300 cursor-not-allowed'
+          canUndo && !readOnly ? 'text-slate-700 hover:bg-slate-100 cursor-pointer' : 'text-slate-300 cursor-not-allowed'
         }`}
         title="Undo (Ctrl+Z)"
       >
@@ -267,9 +319,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Redo */}
       <button
         onClick={onRedo}
-        disabled={!canRedo}
+        disabled={!canRedo || readOnly}
         className={`p-2.5 rounded-lg transition-colors ${
-          canRedo ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-300 cursor-not-allowed'
+          canRedo && !readOnly ? 'text-slate-700 hover:bg-slate-100 cursor-pointer' : 'text-slate-300 cursor-not-allowed'
         }`}
         title="Redo (Ctrl+Y)"
       >
@@ -279,8 +331,13 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
       {/* Clear Page */}
       <button
         onClick={onClear}
-        className="p-2.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
-        title="Clear Current Page"
+        disabled={readOnly}
+        className={`p-2.5 rounded-lg transition-colors ${
+          readOnly
+            ? 'text-slate-300 opacity-40 cursor-not-allowed'
+            : 'text-slate-500 hover:text-red-600 hover:bg-red-50 cursor-pointer'
+        }`}
+        title={readOnly ? 'Clear disabled in View-Only mode' : 'Clear Current Page'}
       >
         <Trash2 className="w-5 h-5" />
       </button>

@@ -1,0 +1,21 @@
+[
+  {
+    "id": "note-sample-1",
+    "lessonId": "lesson-algebra-masterclass",
+    "studentId": "student-demo",
+    "studentName": "Alex Student",
+    "subject": "Mathematics",
+    "topic": "Algebra & Quadratic Systems Masterclass",
+    "lessonDate": "2026-10-14",
+    "title": "Factoring Steps & Quadratic Formula Notes",
+    "content": "## Key Takeaways from Today's Class\n- When factoring $x^2 - 5x + 6 = 0$, find two numbers with sum = -5 and product = +6.\n- The numbers are -2 and -3.\n- Therefore $(x - 2)(x - 3) = 0 \\implies x = 2$ or $x = 3$.\n- Remember to verify roots by plugging back into original expression!\n\n### Questions for Next Session\n- How to quickly factor when leading coefficient $a \\neq 1$?",
+    "keyTakeaways": [
+      "Sum is -5, product is +6",
+      "Roots are x = 2 and x = 3",
+      "Always check by substitution"
+    ],
+    "version": 1,
+    "createdAt": "2026-10-14T17:43:05.096Z",
+    "updatedAt": "2026-10-14T17:43:05.096Z"
+  }
+]

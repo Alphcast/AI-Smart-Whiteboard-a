@@ -48,6 +48,8 @@ export const LessonHub: React.FC<LessonHubProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedLessonForSummary, setSelectedLessonForSummary] = useState<Lesson | null>(null);
+  const [lessonToDelete, setLessonToDelete] = useState<Lesson | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchLessons = async () => {
     setLoading(true);
@@ -74,15 +76,17 @@ export const LessonHub: React.FC<LessonHubProps> = ({
     fetchLessons();
   }, [selectedSubject, statusFilter, searchQuery, selectedDate]);
 
-  const handleDeleteLesson = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this lesson?')) {
-      try {
-        await api.deleteLesson(id);
-        setLessons((prev) => prev.filter((l) => l.id !== id));
-      } catch (err) {
-        console.error('Failed to delete lesson:', err);
-      }
+  const confirmDeleteLesson = async () => {
+    if (!lessonToDelete) return;
+    setDeleting(true);
+    try {
+      await api.deleteLesson(lessonToDelete.id);
+      setLessons((prev) => prev.filter((l) => l.id !== lessonToDelete.id));
+      setLessonToDelete(null);
+    } catch (err) {
+      console.error('Failed to delete lesson:', err);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -371,9 +375,12 @@ export const LessonHub: React.FC<LessonHubProps> = ({
 
                       {/* Delete */}
                       <button
-                        onClick={(e) => handleDeleteLesson(lesson.id, e)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLessonToDelete(lesson);
+                        }}
                         title="Delete lesson"
-                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-lg transition-colors"
+                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -426,6 +433,41 @@ export const LessonHub: React.FC<LessonHubProps> = ({
           lesson={selectedLessonForSummary}
           onOpenWhiteboard={(boardId) => onOpenLessonBoard(boardId, selectedLessonForSummary.id)}
         />
+      )}
+
+      {/* Delete Lesson Confirmation Modal */}
+      {lessonToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto text-red-600">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900">Delete Lesson?</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Are you sure you want to delete <span className="font-semibold text-slate-700">"{lessonToDelete.topic}"</span>? This will also remove associated session state.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setLessonToDelete(null)}
+                disabled={deleting}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 text-sm transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteLesson}
+                disabled={deleting}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 text-white font-medium hover:bg-red-700 text-sm shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

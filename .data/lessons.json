@@ -1,0 +1,73 @@
+[
+  {
+    "id": "lesson-algebra-masterclass",
+    "boardId": "board-algebra-demo",
+    "subject": "Mathematics",
+    "topic": "Algebra & Quadratic Systems Masterclass",
+    "description": "Factoring quadratic equations, step-by-step graphical reasoning, and linear balancing.",
+    "learningObjectives": [
+      "Master factoring of standard quadratic equations ax² + bx + c = 0",
+      "Extract real roots and explain mathematical steps clearly",
+      "Model equations visually on the collaborative whiteboard"
+    ],
+    "lessonDate": "2026-10-14",
+    "scheduledAt": "2026-10-14T17:43:05.096Z",
+    "status": "active",
+    "teacherId": "teacher-primary",
+    "teacherName": "Prof. Clarke",
+    "collaborationMode": "everyone_can_edit",
+    "createdAt": "2026-10-14T17:43:05.096Z",
+    "updatedAt": "2026-10-14T17:43:05.096Z",
+    "summary": "Students analyzed quadratic formulas and factor decomposition, verifying roots algebraically.",
+    "revisionQuestions": [
+      "How does the discriminant b² - 4ac determine the nature of quadratic roots?",
+      "What is the first step in factoring x² - 5x + 6 = 0?",
+      "How do you check solutions on a Cartesian coordinate plane?"
+    ]
+  },
+  {
+    "id": "lesson-physics-equilibrium",
+    "boardId": "board-geometry-demo",
+    "subject": "Physics",
+    "topic": "Newtonian Vectors & Statics Equilibrium",
+    "description": "Resolution of concurrent forces, inclined plane friction, and free-body diagrams.",
+    "learningObjectives": [
+      "Construct free-body diagrams for inclined plane problems",
+      "Resolve force vectors into orthogonal components",
+      "Apply ΣF = 0 conditions for static equilibrium"
+    ],
+    "lessonDate": "2026-10-15",
+    "scheduledAt": "2026-10-15T17:43:05.096Z",
+    "status": "scheduled",
+    "teacherId": "teacher-primary",
+    "teacherName": "Prof. Clarke",
+    "collaborationMode": "teacher_only",
+    "createdAt": "2026-10-14T17:43:05.096Z",
+    "updatedAt": "2026-10-14T17:43:05.096Z"
+  },
+  {
+    "id": "lesson-1792003344692-ctk32",
+    "boardId": "board-1792003344692-qtlhl",
+    "subject": "Physics",
+    "topic": "Kinematics and Velocity Vectors",
+    "description": "Motion in two dimensions with interactive trajectory whiteboard",
+    "learningObjectives": [
+      "Calculate vector components",
+      "Plot projectile motion"
+    ],
+    "lessonDate": "2026-10-14",
+    "scheduledAt": "2026-10-14T10:00:00Z",
+    "status": "active",
+    "teacherId": "teacher-primary",
+    "teacherName": "Prof. Clarke",
+    "collaborationMode": "teacher_only",
+    "createdAt": "2026-10-14T18:42:24.692Z",
+    "updatedAt": "2026-10-14T18:42:49.604Z",
+    "summary": "This lesson covered the foundational principles of two-dimensional kinematics, focusing on the independence of horizontal and vertical motion. Students learned to break initial velocity vectors into orthogonal components using trigonometric functions: vx = v * cos(θ) along the horizontal axis and vy = v * sin(θ) along the vertical axis.\n\nBy analyzing trajectory curves on the interactive whiteboard, the class explored how gravity acts solely along the vertical axis (ay = -g) while horizontal velocity remains constant in the absence of air resistance (ax = 0). Combining these independent parametric equations yields the classic parabolic trajectory, allowing students to systematically plot trajectories, determine peak height, and calculate projectile range.",
+    "revisionQuestions": [
+      "What are the mathematical formulas used to decompose an initial velocity vector v at launch angle θ into horizontal and vertical components?",
+      "A student claims that the acceleration of a projectile is zero at its maximum height because vy = 0. Explain why this reasoning is incorrect.",
+      "A projectile is launched from ground level with an initial velocity of 20 m/s at an angle of 30° above the horizontal. What is its maximum height? (Hint: Use v_0y = 20 * sin(30°) = 10 m/s and vy^2 = v_0y^2 - 2gΔy with g = 9.8 m/s²; Δy ≈ 5.1 m)"
+    ]
+  }
+]

@@ -41,6 +41,8 @@ export const StudentNotebookView: React.FC<StudentNotebookViewProps> = ({
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
   const [selectedNote, setSelectedNote] = useState<StudentNote | null>(null);
   const [copied, setCopied] = useState(false);
+  const [noteToDelete, setNoteToDelete] = useState<StudentNote | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchNotes = async () => {
     setLoading(true);
@@ -76,19 +78,26 @@ export const StudentNotebookView: React.FC<StudentNotebookViewProps> = ({
     return matchesSubj && matchesSearch;
   });
 
-  const handleDeleteNote = async (note: StudentNote, e: React.MouseEvent) => {
+  const handleDeleteClick = (note: StudentNote, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm(`Delete notes for "${note.title}"?`)) {
-      try {
-        await api.deleteStudentNote(note.lessonId, note.id);
-        const next = notes.filter((item) => item.id !== note.id);
-        setNotes(next);
-        if (selectedNote?.id === note.id) {
-          setSelectedNote(next.length > 0 ? next[0] : null);
-        }
-      } catch (err) {
-        console.error('Failed to delete note:', err);
+    setNoteToDelete(note);
+  };
+
+  const confirmDeleteNote = async () => {
+    if (!noteToDelete) return;
+    setDeleting(true);
+    try {
+      await api.deleteStudentNote(noteToDelete.lessonId, noteToDelete.id, studentId);
+      const next = notes.filter((item) => item.id !== noteToDelete.id);
+      setNotes(next);
+      if (selectedNote?.id === noteToDelete.id) {
+        setSelectedNote(next.length > 0 ? next[0] : null);
       }
+      setNoteToDelete(null);
+    } catch (err) {
+      console.error('Failed to delete note:', err);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -270,9 +279,9 @@ export const StudentNotebookView: React.FC<StudentNotebookViewProps> = ({
                       <Download className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={(e) => handleDeleteNote(selectedNote, e)}
+                      onClick={(e) => handleDeleteClick(selectedNote, e)}
                       title="Delete note"
-                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors"
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -332,6 +341,46 @@ export const StudentNotebookView: React.FC<StudentNotebookViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* In-app Delete Confirmation Modal */}
+      {noteToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Delete Study Note?</h3>
+                <p className="text-xs text-slate-500">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+              Are you sure you want to delete your notes for <strong className="text-slate-900 font-semibold">{noteToDelete.title}</strong>?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setNoteToDelete(null)}
+                disabled={deleting}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteNote}
+                disabled={deleting}
+                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                {deleting ? 'Deleting...' : 'Delete Note'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

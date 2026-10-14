@@ -23,6 +23,7 @@ import {
   FileImage,
   FileCode,
   Copy,
+  Trash2,
 } from 'lucide-react';
 import {
   Whiteboard,
@@ -121,6 +122,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   const [isNotesDrawerOpen, setIsNotesDrawerOpen] = useState(false);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   // Floating feedback toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -409,6 +411,19 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
     // Socket.IO Connection & Heartbeat Tracking
     const unsubSocketConnect = socket.on('socket:connect', (data) => {
       logWhiteboard('info', '🟢 Socket.IO connected to server:', data);
+      // Authoritatively recover latest board state on reconnection
+      api
+        .getBoard(boardId)
+        .then((freshBoard) => {
+          if (freshBoard) {
+            setBoard(freshBoard);
+          }
+        })
+        .catch(() => {});
+    });
+
+    const unsubPermDenied = socket.on('board:permission_denied', (data) => {
+      showToast(`⚠️ ${data?.message || 'Whiteboard is currently in view-only mode'}`);
     });
 
     const unsubSocketHeartbeat = socket.on('socket:heartbeat', (data) => {
@@ -748,6 +763,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubP2PError();
       unsubP2PHostError();
       unsubSocketConnect();
+      unsubPermDenied();
       unsubSocketHeartbeat();
       unsubSocketError();
       unsubSocketDisconnect();
@@ -1436,7 +1452,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         onOpenParticipants={() => setIsParticipantsModalOpen(true)}
         onOpenNotes={() => setIsNotesDrawerOpen(true)}
         onOpenSummary={() => setIsSummaryModalOpen(true)}
-        onClearBoard={handleClearPage}
+        onClearBoard={() => setIsClearConfirmOpen(true)}
       />
 
       {/* Main Workspace Area */}
@@ -1450,7 +1466,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
             canRedo={historyIndex < history.length - 1}
             onUndo={handleUndo}
             onRedo={handleRedo}
-            onClear={handleClearPage}
+            onClear={() => setIsClearConfirmOpen(true)}
             onRecognizeEquation={handleRecognizeEquationPrompt}
             onExport={() => setIsExportModalOpen(true)}
             readOnly={!canEditBoard}
@@ -1626,11 +1642,44 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         />
       )}
 
-      {/* Floating Notification Toast */}
-      {toastMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2.5 border border-slate-700/60 pointer-events-none animate-in fade-in slide-in-from-top-2 duration-150">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMessage}</span>
+      {/* Clear Canvas Confirmation Modal */}
+      {isClearConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Clear Whiteboard Page?</h3>
+                <p className="text-xs text-slate-500">All participants will see this change.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+              Are you sure you want to clear all objects and drawings on this whiteboard page? You can use Undo (Ctrl+Z) to restore if needed.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsClearConfirmOpen(false)}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleClearPage();
+                  setIsClearConfirmOpen(false);
+                }}
+                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                Clear Canvas
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

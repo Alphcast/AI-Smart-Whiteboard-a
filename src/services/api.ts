@@ -465,12 +465,15 @@ export const api = {
     ];
   },
 
-  async createSubject(name: string, color?: string, icon?: string): Promise<SubjectItem> {
+  async createSubject(nameOrObj: string | { name: string; color?: string; icon?: string }, color?: string, icon?: string): Promise<SubjectItem> {
+    const name = typeof nameOrObj === 'object' ? nameOrObj.name : nameOrObj;
+    const finalColor = typeof nameOrObj === 'object' ? nameOrObj.color || color : color;
+    const finalIcon = typeof nameOrObj === 'object' ? nameOrObj.icon || icon : icon;
     try {
       const res = await fetch('/api/subjects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, color, icon }),
+        body: JSON.stringify({ name, color: finalColor, icon: finalIcon }),
       });
       if (res.ok) {
         const json = await safeJson(res);
@@ -482,8 +485,8 @@ export const api = {
     return {
       id: `subj-${Date.now()}`,
       name,
-      color: color || '#2563eb',
-      icon: icon || '📚',
+      color: finalColor || '#2563eb',
+      icon: finalIcon || '📚',
     };
   },
 
@@ -673,10 +676,20 @@ export const api = {
   // ================= STUDENT NOTES =================
   async getStudentLessonNote(lessonId: string, studentId = 'student-demo'): Promise<StudentNote | null> {
     try {
-      const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes?studentId=${encodeURIComponent(studentId)}`);
+      const res = await fetch(
+        `/api/lessons/${encodeURIComponent(lessonId)}/notes?studentId=${encodeURIComponent(studentId)}`,
+        {
+          headers: {
+            'x-user-id': studentId,
+          },
+        }
+      );
       if (res.ok) {
         const json = await safeJson(res);
         if (json.success && json.data) return json.data;
+      } else if (res.status === 403) {
+        console.warn('[API] Access to private student notes forbidden');
+        return null;
       }
     } catch {
       // fallback to localStorage
@@ -703,32 +716,50 @@ export const api = {
       version?: number;
     }
   ): Promise<StudentNote> {
+    const activeStudentId = data.studentId || 'student-demo';
+
     try {
       const res = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': activeStudentId,
+        },
         body: JSON.stringify(data),
       });
+
       if (res.ok) {
         const json = await safeJson(res);
         if (json.success && json.data) {
           try {
-            const key = `student_note_${lessonId}_${data.studentId || 'student-demo'}`;
+            const key = `student_note_${lessonId}_${activeStudentId}`;
             localStorage.setItem(key, JSON.stringify(json.data));
           } catch {
             // ignore
           }
           return json.data;
         }
+      } else if (res.status === 409) {
+        const conflictJson = await safeJson(res);
+        if (conflictJson?.data) {
+          console.warn('[API] Concurrency conflict detected in student note save, returning server state');
+          return conflictJson.data;
+        }
+        throw new Error('Concurrency conflict: newer version exists');
+      } else if (res.status === 403) {
+        throw new Error('Forbidden: Unauthorized to save notes for this user');
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.message?.includes('Forbidden') || err?.message?.includes('Concurrency conflict')) {
+        throw err;
+      }
       // offline fallback
     }
 
     const fallbackNote: StudentNote = {
       id: `note-${Date.now()}`,
       lessonId,
-      studentId: data.studentId || 'student-demo',
+      studentId: activeStudentId,
       studentName: data.studentName || 'Alex Student',
       subject: 'Mathematics',
       topic: 'Lesson Notes',
@@ -753,7 +784,11 @@ export const api = {
 
   async getStudentAllNotes(studentId = 'student-demo'): Promise<StudentNote[]> {
     try {
-      const res = await fetch(`/api/students/${encodeURIComponent(studentId)}/notes`);
+      const res = await fetch(`/api/students/${encodeURIComponent(studentId)}/notes`, {
+        headers: {
+          'x-user-id': studentId,
+        },
+      });
       if (res.ok) {
         const json = await safeJson(res);
         if (json.success && Array.isArray(json.data)) return json.data;
@@ -764,10 +799,13 @@ export const api = {
     return [];
   },
 
-  async deleteStudentNote(lessonId: string, noteId: string): Promise<void> {
+  async deleteStudentNote(lessonId: string, noteId: string, studentId = 'student-demo'): Promise<void> {
     try {
       await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/notes/${encodeURIComponent(noteId)}`, {
         method: 'DELETE',
+        headers: {
+          'x-user-id': studentId,
+        },
       });
     } catch {
       // fallback

@@ -152,11 +152,7 @@ export const LessonClassroomBar: React.FC<LessonClassroomBarProps> = ({
         {onClearBoard && isTeacher && (
           <button
             type="button"
-            onClick={() => {
-              if (window.confirm('Clear all drawings on this whiteboard page?')) {
-                onClearBoard();
-              }
-            }}
+            onClick={onClearBoard}
             title="Clear board page"
             className="px-2.5 py-1 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
           >
