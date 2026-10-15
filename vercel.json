@@ -20,7 +20,7 @@
       "destination": "/api?__path=socket.io"
     },
     {
-      "source": "/((?!api|socket\\.io).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
