@@ -1101,37 +1101,39 @@ export const api = {
     };
   },
 
-  // Remote Session
+  // Remote Session (WhatsApp Web style pairing & real-time control)
   async createRemoteSession(
     boardId: string,
     preferredSessionId?: string,
-    preferredPasscode?: string
+    preferredPasscode?: string,
+    boardTitle?: string
   ): Promise<{
     sessionId: string;
     passcode: string;
+    authToken: string;
     boardId: string;
+    boardTitle?: string;
+    state: string;
+    connectedControllersCount: number;
     url: string;
-    publicUrl?: string;
+    publicUrl: string;
   }> {
-    try {
-      const res = await fetch('/api/remote/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          boardId,
-          sessionId: preferredSessionId,
-          passcode: preferredPasscode,
-        }),
-      });
-      if (res.ok) {
-        const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
-      }
-    } catch {
-      // Fallback
+    const res = await fetch('/api/remote/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        boardId,
+        boardTitle,
+        sessionId: preferredSessionId,
+        passcode: preferredPasscode,
+      }),
+    });
+    if (res.ok) {
+      const json = await safeJson(res);
+      if (json.success && json.data) return json.data;
     }
 
-    // Client-side fallback pairing code
+    // Fallback if network issue
     const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
     let code = (preferredPasscode || '').trim().toUpperCase();
     if (!code || code.length < 4) {
@@ -1141,37 +1143,122 @@ export const api = {
       }
     }
     const sessId = preferredSessionId || `sess-${Date.now()}-${code.toLowerCase()}`;
-    const url = `/remote?session=${sessId}&code=${code}`;
+    const token = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const url = `/remote?session=${encodeURIComponent(sessId)}&token=${encodeURIComponent(token)}&code=${encodeURIComponent(code)}&boardId=${encodeURIComponent(boardId)}`;
 
     return {
       sessionId: sessId,
       passcode: code,
+      authToken: token,
       boardId,
+      boardTitle: boardTitle || 'Interactive Whiteboard',
+      state: 'awaiting_scan',
+      connectedControllersCount: 0,
       url,
       publicUrl: typeof window !== 'undefined' ? `${window.location.origin}${url}` : url,
     };
+  },
+
+  async getRemoteSession(sessionId: string): Promise<{
+    sessionId: string;
+    boardId: string;
+    boardTitle?: string;
+    passcode: string;
+    state: 'awaiting_scan' | 'scanned' | 'connected' | 'rejected' | 'disconnected';
+    deviceInfo?: string;
+    connectedControllersCount: number;
+    connectedDisplays: number;
+    scannedAt?: number;
+    authorizedAt?: number;
+    lastActive?: number;
+  }> {
+    const res = await fetch(`/api/remote/sessions/${encodeURIComponent(sessionId)}`);
+    if (res.ok) {
+      const json = await safeJson(res);
+      if (json.success && json.data) return json.data;
+    }
+
+    throw new Error(`Remote session ${sessionId} not found or server offline`);
+  },
+
+  async scanRemoteSession(
+    sessionId: string,
+    token?: string,
+    passcode?: string,
+    deviceInfo?: string
+  ): Promise<{
+    sessionId: string;
+    boardId: string;
+    boardTitle?: string;
+    state: string;
+    deviceInfo?: string;
+  }> {
+    const res = await fetch(`/api/remote/sessions/${encodeURIComponent(sessionId)}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, passcode, deviceInfo }),
+    });
+    if (res.ok) {
+      const json = await safeJson(res);
+      if (json.success && json.data) return json.data;
+    }
+    throw new Error('Failed to report QR scan to server');
+  },
+
+  async approveRemoteSession(
+    sessionId: string,
+    token?: string,
+    passcode?: string,
+    deviceInfo?: string
+  ): Promise<{
+    sessionId: string;
+    boardId: string;
+    boardTitle?: string;
+    state: string;
+    deviceInfo?: string;
+  }> {
+    const res = await fetch(`/api/remote/sessions/${encodeURIComponent(sessionId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, passcode, deviceInfo }),
+    });
+    if (res.ok) {
+      const json = await safeJson(res);
+      if (json.success && json.data) return json.data;
+    }
+    throw new Error('Failed to authorize remote session');
+  },
+
+  async rejectRemoteSession(sessionId: string, reason?: string): Promise<void> {
+    await fetch(`/api/remote/sessions/${encodeURIComponent(sessionId)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async disconnectRemoteSession(sessionId: string): Promise<void> {
+    await fetch(`/api/remote/sessions/${encodeURIComponent(sessionId)}/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
   },
 
   async lookupSessionByCode(code: string): Promise<{
     sessionId: string;
     passcode: string;
     boardId: string;
+    boardTitle?: string;
+    state?: string;
+    authToken?: string;
   }> {
-    try {
-      const res = await fetch(`/api/remote/lookup?code=${encodeURIComponent(code)}`);
-      if (res.ok) {
-        const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
-      }
-    } catch {
-      // Fallback
+    const res = await fetch(`/api/remote/lookup?code=${encodeURIComponent(code)}`);
+    if (res.ok) {
+      const json = await safeJson(res);
+      if (json.success && json.data) return json.data;
     }
 
-    return {
-      sessionId: `sess-${code.toLowerCase()}`,
-      passcode: code.toUpperCase(),
-      boardId: 'board-algebra-demo',
-    };
+    throw new Error('No active whiteboard session found with this passcode');
   },
 
   async sendRemoteEvent(sessionId: string, type: string, payload: any): Promise<void> {
@@ -1204,36 +1291,13 @@ export const api = {
     return { data: [], serverTime: Date.now() };
   },
 
-  async getRemoteSession(sessionId: string): Promise<{
-    sessionId: string;
-    boardId: string;
-    passcode: string;
-    connectedControllers: number;
-    connectedDisplays: number;
-  }> {
-    try {
-      const res = await fetch(`/api/remote/sessions/${sessionId}`);
-      if (res.ok) {
-        const json = await safeJson(res);
-        if (json.success && json.data) return json.data;
-      }
-    } catch {
-      // Handled
-    }
-
-    return {
-      sessionId,
-      boardId: 'board-algebra-demo',
-      passcode: 'DEMO99',
-      connectedControllers: 1,
-      connectedDisplays: 1,
-    };
-  },
-
   async getActiveSessionForBoard(boardId: string): Promise<{
     sessionId: string;
     passcode: string;
     boardId: string;
+    boardTitle?: string;
+    state: string;
+    deviceInfo?: string;
     connectedControllers: number;
   } | null> {
     try {

@@ -299,10 +299,18 @@ class RealtimeSocketClient {
         'lesson:cursor',
         'lesson:summary_ready',
         'remote:connected',
+        'remote:session_state',
+        'remote:scan_detected',
+        'remote:approved',
+        'remote:rejected',
         'remote:phone_paired',
         'remote:phone_disconnected',
         'remote:status',
         'remote:error',
+        'remote:tap',
+        'remote:pan',
+        'remote:text_input',
+        'remote:text_preview',
         'remote:stroke_start',
         'remote:stroke_point',
         'remote:stroke_end',
@@ -424,17 +432,23 @@ class RealtimeSocketClient {
   }
 
   // Bind remote session with WebRTC P2P (PeerJS) + BroadcastChannel + Socket.IO + HTTP Polling
-  bindRemote(sessionId: string, role: 'controller' | 'display', passcode?: string, deviceInfo?: string) {
+  bindRemote(
+    sessionId: string,
+    role: 'controller' | 'display',
+    passcode?: string,
+    token?: string,
+    deviceInfo?: string
+  ) {
     this.activeRemoteSessionId = sessionId;
     this.activePasscode = passcode || null;
     this.activeRole = role;
 
     this.currentContext = {
       type: 'remote',
-      payload: { sessionId, role, passcode, deviceInfo },
+      payload: { sessionId, role, passcode, token, deviceInfo },
     };
 
-    this.recordDiagnostic('system', 'remote:bind', { sessionId, role, passcode });
+    this.recordDiagnostic('system', 'remote:bind', { sessionId, role, passcode, token });
 
     // 1. Socket.IO connection
     const s = this.connect();
@@ -460,6 +474,60 @@ class RealtimeSocketClient {
     this.startPolling();
   }
 
+  // Notify server and display that QR code was scanned
+  scanDetected(sessionId: string, token?: string, passcode?: string, deviceInfo?: string) {
+    this.emit('remote:scan_detected', {
+      sessionId,
+      token,
+      passcode,
+      deviceInfo: deviceInfo || navigator.userAgent,
+    });
+  }
+
+  // Explicit user approval from phone
+  approveConnection(sessionId: string, token?: string, passcode?: string, deviceInfo?: string) {
+    this.emit('remote:approve_connection', {
+      sessionId,
+      token,
+      passcode,
+      deviceInfo: deviceInfo || navigator.userAgent,
+    });
+  }
+
+  // User rejection from phone
+  rejectConnection(sessionId: string, reason?: string) {
+    this.emit('remote:reject_connection', {
+      sessionId,
+      reason: reason || 'User declined connection on phone',
+    });
+  }
+
+  // Tap trackpad (quick click or double click)
+  sendTap(x: number, y: number, isDoubleTap = false) {
+    this.emit('remote:tap', { x, y, isDoubleTap });
+  }
+
+  // Two-finger scroll / pan gesture
+  sendPan(dx: number, dy: number) {
+    this.emit('remote:pan', { dx, dy });
+  }
+
+  // Keyboard text or sticky note insertion directly from phone
+  sendTextInput(
+    text: string,
+    noteType: 'text' | 'sticky' | 'equation' = 'sticky',
+    color?: string,
+    x?: number,
+    y?: number
+  ) {
+    this.emit('remote:text_input', { text, noteType, color, x, y });
+  }
+
+  // Live typing preview
+  sendTextPreview(text: string, isTyping: boolean, x?: number, y?: number) {
+    this.emit('remote:text_preview', { text, isTyping, x, y });
+  }
+
   // ----------------------- BROADCAST CHANNEL (LOCAL/TAB SYNC) -----------------------
   private initBroadcastChannel(passcode: string, role: 'controller' | 'display') {
     try {
@@ -480,9 +548,19 @@ class RealtimeSocketClient {
 
         this.recordDiagnostic('broadcast', data.type || 'broadcast:msg', data, 'in');
 
-        if (data.type === 'remote:handshake' && role === 'display') {
+        if (data.type === 'remote:scan_detected' && role === 'display') {
+          this.emitLocal('remote:scan_detected', data);
+          return;
+        }
+
+        if (data.type === 'remote:approve_connection' && role === 'display') {
           this.isConnectedState = true;
           this.connectionStatus = 'connected';
+          this.emitLocal('remote:approved', {
+            sessionId: this.activeRemoteSessionId,
+            transport: 'broadcast-channel',
+            deviceInfo: data.deviceInfo || 'Local Browser Tab',
+          });
           this.emitLocal('remote:phone_paired', {
             sessionId: this.activeRemoteSessionId,
             transport: 'broadcast-channel',
@@ -499,17 +577,6 @@ class RealtimeSocketClient {
           this.emitLocal('*', data);
         }
       };
-
-      if (role === 'controller') {
-        // Send initial broadcast handshake
-        setTimeout(() => {
-          this.broadcastChannel?.postMessage({
-            type: 'remote:handshake',
-            _senderRole: 'controller',
-            deviceInfo: navigator.userAgent,
-          });
-        }, 100);
-      }
     } catch {
       // ignore
     }

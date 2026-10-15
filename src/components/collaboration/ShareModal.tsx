@@ -8,6 +8,7 @@ import QRCode from 'qrcode';
 import { Share2, Copy, Check, Users, Shield, X, Smartphone, QrCode as QrIcon, ExternalLink } from 'lucide-react';
 import { Whiteboard } from '../../types/whiteboard';
 import { socket } from '../../services/socket';
+import { api } from '../../services/api';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -35,23 +36,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedRemote, setCopiedRemote] = useState(false);
 
-  const [activeSessionId, setActiveSessionId] = useState<string>(
-    () => propSessionId || `sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
-  );
-  const [activePasscode, setActivePasscode] = useState<string>(() => {
-    if (propPasscode) return propPasscode;
-    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
-  });
-
-  useEffect(() => {
-    if (propSessionId) setActiveSessionId(propSessionId);
-    if (propPasscode) setActivePasscode(propPasscode);
-  }, [propSessionId, propPasscode]);
+  const [activeSessionId, setActiveSessionId] = useState<string>(propSessionId || '');
+  const [activePasscode, setActivePasscode] = useState<string>(propPasscode || '');
+  const [remoteUrl, setRemoteUrl] = useState<string>('');
+  const [phoneState, setPhoneState] = useState<'awaiting_scan' | 'scanned' | 'connected'>('awaiting_scan');
 
   const [qrSvg, setQrSvg] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -59,7 +47,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const shareUrl = `${currentOrigin}/whiteboard/${board.id}?role=${permission}`;
-  const remoteUrl = `${currentOrigin}/remote?session=${encodeURIComponent(activeSessionId)}&code=${encodeURIComponent(activePasscode)}`;
 
   const renderQRCode = useCallback(async (url: string) => {
     if (!url) return;
@@ -97,40 +84,58 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     } catch {
       // ignore
     }
-
-    try {
-      if (canvasRef.current && typeof qrLib?.toCanvas === 'function') {
-        await qrLib.toCanvas(canvasRef.current, url, {
-          width: 220,
-          margin: 1.5,
-          color: {
-            dark: '#0f172a',
-            light: '#ffffff',
-          },
-        });
-      }
-    } catch {
-      // ignore
-    }
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-    renderQRCode(remoteUrl);
-    socket.bindRemote(activeSessionId, 'display', activePasscode);
 
-    const unsubPaired = socket.on('remote:phone_paired', () => {
+    if (isPhoneConnected) {
+      setPhoneState('connected');
+    }
+
+    // Initialize or fetch secure remote session
+    api
+      .createRemoteSession(board.id, propSessionId || undefined, propPasscode || undefined, board.title)
+      .then((sess) => {
+        setActiveSessionId(sess.sessionId);
+        setActivePasscode(sess.passcode);
+        const fullUrl = sess.publicUrl || `${currentOrigin}${sess.url}`;
+        setRemoteUrl(fullUrl);
+        renderQRCode(fullUrl);
+        socket.bindRemote(sess.sessionId, 'display', sess.passcode, sess.authToken);
+      })
+      .catch(() => {
+        const fallbackUrl = `${currentOrigin}/remote?session=${encodeURIComponent(activeSessionId || board.id)}`;
+        setRemoteUrl(fallbackUrl);
+        renderQRCode(fallbackUrl);
+      });
+
+    const unsubScanned = socket.on('remote:scan_detected', () => {
+      setPhoneState('scanned');
+    });
+
+    const unsubApproved = socket.on('remote:approved', () => {
+      setPhoneState('connected');
       onPhoneConnectionChange?.(true);
     });
+
+    const unsubPaired = socket.on('remote:phone_paired', () => {
+      setPhoneState('connected');
+      onPhoneConnectionChange?.(true);
+    });
+
     const unsubDisc = socket.on('remote:phone_disconnected', () => {
+      setPhoneState('awaiting_scan');
       onPhoneConnectionChange?.(false);
     });
 
     return () => {
+      unsubScanned();
+      unsubApproved();
       unsubPaired();
       unsubDisc();
     };
-  }, [isOpen, remoteUrl, activeSessionId, activePasscode, renderQRCode, onPhoneConnectionChange]);
+  }, [isOpen, isPhoneConnected, board.id, board.title, propSessionId, propPasscode, currentOrigin, renderQRCode, onPhoneConnectionChange]);
 
   if (!isOpen) return null;
 

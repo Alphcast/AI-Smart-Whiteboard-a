@@ -283,6 +283,9 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
   currentUserNameRef.current = currentUserName;
   const currentToolRef = useRef(currentTool);
   currentToolRef.current = currentTool;
+  const selectedObjectIdRef = useRef(selectedObjectId);
+  selectedObjectIdRef.current = selectedObjectId;
+  const remoteDragPrevPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Real-time mouse cursor broadcasting
   const lastCursorSendRef = useRef<number>(0);
@@ -732,6 +735,59 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         mode: data.mode || 'move',
         pressure: data.pressure,
       });
+
+      // Handle real-time touchpad drag on selected object
+      if ((data.mode === 'drag' || data.isDown) && selectedObjectIdRef.current) {
+        if (remoteDragPrevPosRef.current) {
+          const dx = data.x - remoteDragPrevPosRef.current.x;
+          const dy = data.y - remoteDragPrevPosRef.current.y;
+          const targetPg = currentPageIdRef.current;
+          const sid = selectedObjectIdRef.current;
+
+          setBoard((prev) => {
+            if (!prev) return prev;
+            const currentObjs = prev.objects[targetPg] || [];
+            const updated = currentObjs.map((obj) => {
+              if (obj.id === sid) {
+                if (obj.type === 'stroke' && obj.strokeData) {
+                  return {
+                    ...obj,
+                    x: obj.x + dx,
+                    y: obj.y + dy,
+                    strokeData: {
+                      ...obj.strokeData,
+                      points: obj.strokeData.points.map((p) => ({
+                        x: p.x + dx,
+                        y: p.y + dy,
+                        pressure: p.pressure,
+                      })),
+                    },
+                  };
+                }
+                return {
+                  ...obj,
+                  x: obj.x + dx,
+                  y: obj.y + dy,
+                };
+              }
+              return obj;
+            });
+            return {
+              ...prev,
+              objects: {
+                ...prev.objects,
+                [targetPg]: updated,
+              },
+            };
+          });
+        }
+        remoteDragPrevPosRef.current = { x: data.x, y: data.y };
+      } else {
+        if (remoteDragPrevPosRef.current && boardRef.current) {
+          queueAutoSave(boardRef.current);
+        }
+        remoteDragPrevPosRef.current = null;
+      }
     });
 
     // Remote phone drawing onto laptop canvas!
@@ -884,6 +940,102 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       if (data.color) setColor(data.color);
     });
 
+    // Remote Phone Tap (tap to select or deselect objects on whiteboard)
+    const unsubTap = socket.on('remote:tap', (data) => {
+      markTransmissionActive();
+      const { x, y } = data || {};
+      if (typeof x !== 'number' || typeof y !== 'number') return;
+      logWhiteboard('info', '📱 Remote phone tap detected at:', data);
+
+      const targetPg = currentPageIdRef.current;
+      const currentObjs = boardRef.current?.objects[targetPg] || [];
+
+      // Hit test in reverse order (top to bottom)
+      const clicked = [...currentObjs].reverse().find((obj) => {
+        if (obj.type === 'stroke' && obj.strokeData) {
+          return obj.strokeData.points.some(
+            (p) => Math.hypot(p.x - x, p.y - y) < 24
+          );
+        }
+        const w = obj.width || 120;
+        const h = obj.height || 60;
+        return x >= obj.x && x <= obj.x + w && y >= obj.y && y <= obj.y + h;
+      });
+
+      if (clicked) {
+        setSelectedObjectId(clicked.id);
+        showToast(`Selected: ${clicked.type}`);
+      } else {
+        setSelectedObjectId(null);
+      }
+    });
+
+    // Remote Phone Canvas Pan (2-finger drag on phone touchpad)
+    const unsubPan = socket.on('remote:pan', (data) => {
+      markTransmissionActive();
+      const { dx, dy } = data || {};
+      if (typeof dx === 'number' && typeof dy === 'number') {
+        setPan((prev) => ({
+          x: Math.round(prev.x + dx),
+          y: Math.round(prev.y + dy),
+        }));
+      }
+    });
+
+    // Remote Phone Text & Sticky Note Input (typing on phone keyboard)
+    const unsubTextInput = socket.on('remote:text_input', (data) => {
+      markTransmissionActive();
+      logWhiteboard('info', '📱 Remote phone text input received:', data);
+      const { text, noteType, color: noteColor, x, y } = data || {};
+      if (!text || !text.trim()) return;
+
+      const targetPg = currentPageIdRef.current;
+      const posX = typeof x === 'number' ? x : 400;
+      const posY = typeof y === 'number' ? y : 300;
+
+      if (noteType === 'sticky') {
+        const stickyObj: WhiteboardObject = {
+          id: `sticky-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          pageId: targetPg,
+          type: 'sticky',
+          x: posX,
+          y: posY,
+          width: 220,
+          height: 180,
+          zIndex: 100,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          stickyData: {
+            text: text.trim(),
+            color: noteColor || '#fef08a',
+          },
+        };
+        handleAddObject(stickyObj);
+        showToast('📝 Sticky note added from phone keyboard');
+      } else {
+        const textObj: WhiteboardObject = {
+          id: `text-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          pageId: targetPg,
+          type: 'text',
+          x: posX,
+          y: posY,
+          width: 260,
+          height: 60,
+          zIndex: 100,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          textData: {
+            text: text.trim(),
+            fontSize: 24,
+            fontFamily: 'sans-serif',
+            color: noteColor && noteColor.startsWith('#') && noteColor !== '#fef08a' ? noteColor : '#1e293b',
+          },
+        };
+        handleAddObject(textObj);
+        showToast('🔤 Text added from phone keyboard');
+      }
+    });
+
     // Periodic Heartbeat Status Logger (every 15s) to console
     const heartbeatInterval = setInterval(() => {
       const diag = socket.getDiagnostics();
@@ -931,6 +1083,9 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
       unsubEquationSolve();
       unsubAction();
       unsubToolChange();
+      unsubTap();
+      unsubPan();
+      unsubTextInput();
     };
   }, [boardId, markTransmissionActive, showToast, logWhiteboard]);
 
@@ -1757,6 +1912,7 @@ export const WhiteboardEditor: React.FC<WhiteboardEditorProps> = ({
         isOpen={isPhoneModalOpen}
         onClose={() => setIsPhoneModalOpen(false)}
         boardId={board.id}
+        boardTitle={board.title}
         sessionId={pairedSessionId}
         passcode={activePasscode}
         isPhoneConnected={isPhoneConnected}

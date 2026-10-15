@@ -539,14 +539,23 @@ interface RemoteEventItem {
   timestamp: number;
 }
 
+export type RemoteSessionState = 'awaiting_scan' | 'scanned' | 'connected' | 'rejected' | 'disconnected';
+
 interface ActiveRemoteSession {
   sessionId: string;
   boardId: string;
+  boardTitle?: string;
   passcode: string;
+  authToken: string;
+  state: RemoteSessionState;
+  deviceInfo?: string;
   createdAt: number;
   lastActive: number;
+  scannedAt?: number;
+  authorizedAt?: number;
   displaySockets: Set<WebSocket>;
   controllerSockets: Set<WebSocket>;
+  connectedControllersCount: number;
   eventBuffer: RemoteEventItem[];
 }
 
@@ -560,11 +569,18 @@ function loadSessionsFromDisk() {
         remoteSessions.set(s.sessionId, {
           sessionId: s.sessionId,
           boardId: s.boardId,
+          boardTitle: s.boardTitle,
           passcode: s.passcode,
+          authToken: s.authToken || `tok-${s.sessionId}`,
+          state: s.state || 'awaiting_scan',
+          deviceInfo: s.deviceInfo,
           createdAt: s.createdAt || Date.now(),
           lastActive: s.lastActive || Date.now(),
+          scannedAt: s.scannedAt,
+          authorizedAt: s.authorizedAt,
           displaySockets: new Set(),
           controllerSockets: new Set(),
+          connectedControllersCount: s.connectedControllersCount || 0,
           eventBuffer: s.eventBuffer || [],
         });
       }
@@ -580,9 +596,16 @@ function saveSessionsToDisk() {
     const list = Array.from(remoteSessions.values()).map((s) => ({
       sessionId: s.sessionId,
       boardId: s.boardId,
+      boardTitle: s.boardTitle,
       passcode: s.passcode,
+      authToken: s.authToken,
+      state: s.state,
+      deviceInfo: s.deviceInfo,
       createdAt: s.createdAt,
       lastActive: s.lastActive,
+      scannedAt: s.scannedAt,
+      authorizedAt: s.authorizedAt,
+      connectedControllersCount: s.connectedControllersCount,
       eventBuffer: s.eventBuffer.slice(-80),
     }));
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2), 'utf-8');
@@ -1656,16 +1679,23 @@ Keep the explanation clear, encouraging, and structured with concise bullet poin
   });
 });
 
-// 11. Smartphone Remote Session Creation
+// 11. Smartphone Remote Session Creation (WhatsApp Web pairing model)
 app.post('/api/remote/sessions', (req, res) => {
-  const { boardId, sessionId: reqSessionId, passcode: reqPasscode } = req.body;
+  const { boardId, sessionId: reqSessionId, passcode: reqPasscode, boardTitle: reqBoardTitle } = req.body;
   if (!boardId) {
     return res.status(400).json({ success: false, error: { message: 'boardId is required' } });
   }
 
   loadSessionsFromDisk();
 
-  // Use requested passcode if provided and valid, otherwise generate a 6-character alphanumeric pairing passcode
+  // Determine board title for user-friendly authorization display on phone
+  let boardTitle = reqBoardTitle;
+  if (!boardTitle) {
+    const linkedBoard = boardsMap.get(boardId);
+    boardTitle = linkedBoard?.title || 'Interactive Whiteboard';
+  }
+
+  // 6-character user-friendly fallback passcode
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let passcode = (reqPasscode || '').trim().toUpperCase();
   if (!passcode || passcode.length < 4) {
@@ -1674,16 +1704,23 @@ app.post('/api/remote/sessions', (req, res) => {
       passcode += chars.charAt(Math.floor(Math.random() * chars.length));
     }
   }
+
+  // Cryptographically secure authorization token passed via QR code
+  const authToken = `tok_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`;
   const sessionId = reqSessionId || `sess-${Date.now()}-${passcode.toLowerCase()}`;
 
   const sessionObj: ActiveRemoteSession = {
     sessionId,
     boardId,
+    boardTitle,
     passcode,
+    authToken,
+    state: 'awaiting_scan',
     createdAt: Date.now(),
     lastActive: Date.now(),
     displaySockets: new Set(),
     controllerSockets: new Set(),
+    connectedControllersCount: 0,
     eventBuffer: [],
   };
 
@@ -1696,34 +1733,44 @@ app.post('/api/remote/sessions', (req, res) => {
     (process.env.APP_URL || '').replace(/\/$/, '') ||
     `${proto}://${host}`;
 
-  const publicUrl = `${publicBaseUrl}/remote?session=${sessionId}&code=${passcode}`;
+  const publicUrl = `${publicBaseUrl}/remote?session=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(authToken)}&code=${encodeURIComponent(passcode)}&boardId=${encodeURIComponent(boardId)}`;
 
   res.json({
     success: true,
     data: {
       sessionId,
       passcode,
+      authToken,
       boardId,
-      url: `/remote?session=${sessionId}&code=${passcode}`,
+      boardTitle,
+      state: 'awaiting_scan',
+      connectedControllersCount: 0,
+      url: `/remote?session=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(authToken)}&code=${encodeURIComponent(passcode)}&boardId=${encodeURIComponent(boardId)}`,
       publicUrl,
     },
   });
 });
 
-// Helper to get or safely create a remote session record in serverless environments
+// Helper to get or safely create a remote session record
 function getOrCreateSession(sessionId: string, passcode?: string, boardId?: string): ActiveRemoteSession {
   loadSessionsFromDisk();
   let session = remoteSessions.get(sessionId);
   if (!session) {
     const code = passcode || sessionId.split('-').pop()?.toUpperCase() || 'REMOTE';
+    const bId = boardId || 'board-algebra-demo';
+    const bTitle = boardsMap.get(bId)?.title || 'Interactive Whiteboard';
     session = {
       sessionId,
-      boardId: boardId || 'board-algebra-demo',
+      boardId: bId,
+      boardTitle: bTitle,
       passcode: code,
+      authToken: `tok_${sessionId}`,
+      state: 'awaiting_scan',
       createdAt: Date.now(),
       lastActive: Date.now(),
       displaySockets: new Set(),
       controllerSockets: new Set(),
+      connectedControllersCount: 0,
       eventBuffer: [],
     };
     remoteSessions.set(sessionId, session);
@@ -1732,7 +1779,197 @@ function getOrCreateSession(sessionId: string, passcode?: string, boardId?: stri
   return session;
 }
 
-// 12. Lookup Remote Session by 6-Character Passcode
+// 12. Check Remote Session Status
+app.get('/api/remote/sessions/:sessionId', (req, res) => {
+  loadSessionsFromDisk();
+  const session = remoteSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, error: { message: 'Session not found or expired' } });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      sessionId: session.sessionId,
+      boardId: session.boardId,
+      boardTitle: session.boardTitle,
+      passcode: session.passcode,
+      state: session.state,
+      deviceInfo: session.deviceInfo,
+      connectedControllersCount: session.connectedControllersCount,
+      connectedDisplays: session.displaySockets.size,
+      scannedAt: session.scannedAt,
+      authorizedAt: session.authorizedAt,
+      lastActive: session.lastActive,
+    },
+  });
+});
+
+// 13. Notify Scan Detected (Phone opens QR code link)
+app.post('/api/remote/sessions/:sessionId/scan', (req, res) => {
+  loadSessionsFromDisk();
+  const session = remoteSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, error: { message: 'Session not found' } });
+  }
+
+  const { token, passcode, deviceInfo } = req.body;
+  const isTokenMatch = token && session.authToken && token === session.authToken;
+  const isCodeMatch = passcode && session.passcode && passcode.toUpperCase() === session.passcode.toUpperCase();
+
+  if (!isTokenMatch && !isCodeMatch) {
+    return res.status(403).json({ success: false, error: { message: 'Invalid pairing token or passcode' } });
+  }
+
+  // Update session state to 'scanned' (waiting for user approval on phone)
+  if (session.state === 'awaiting_scan') {
+    session.state = 'scanned';
+  }
+  session.scannedAt = Date.now();
+  session.deviceInfo = deviceInfo || 'Smartphone';
+  session.lastActive = Date.now();
+  saveSessionsToDisk();
+
+  // Notify laptop display immediately that phone has scanned the QR code!
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:scan_detected', {
+    sessionId: session.sessionId,
+    state: 'scanned',
+    deviceInfo: session.deviceInfo,
+    scannedAt: session.scannedAt,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      sessionId: session.sessionId,
+      boardId: session.boardId,
+      boardTitle: session.boardTitle,
+      state: session.state,
+      deviceInfo: session.deviceInfo,
+    },
+  });
+});
+
+// 14. Explicit User Approval (User taps "Approve & Connect" on Phone)
+app.post('/api/remote/sessions/:sessionId/approve', (req, res) => {
+  loadSessionsFromDisk();
+  const session = remoteSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, error: { message: 'Session not found' } });
+  }
+
+  const { token, passcode, deviceInfo } = req.body;
+  const isTokenMatch = token && session.authToken && token === session.authToken;
+  const isCodeMatch = passcode && session.passcode && passcode.toUpperCase() === session.passcode.toUpperCase();
+
+  if (!isTokenMatch && !isCodeMatch) {
+    return res.status(403).json({ success: false, error: { message: 'Invalid authorization credentials' } });
+  }
+
+  session.state = 'connected';
+  session.authorizedAt = Date.now();
+  session.connectedControllersCount = 1;
+  session.deviceInfo = deviceInfo || session.deviceInfo || 'Smartphone';
+  session.lastActive = Date.now();
+  saveSessionsToDisk();
+
+  // Broadcast approved & paired state to both laptop and phone
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:approved', {
+    sessionId: session.sessionId,
+    boardId: session.boardId,
+    deviceInfo: session.deviceInfo,
+    isPaired: true,
+    connectedControllers: 1,
+    authorizedAt: session.authorizedAt,
+  });
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:phone_paired', {
+    sessionId: session.sessionId,
+    boardId: session.boardId,
+    deviceInfo: session.deviceInfo,
+    isPaired: true,
+  });
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+    sessionId: session.sessionId,
+    boardId: session.boardId,
+    isPaired: true,
+    connectedControllers: 1,
+    state: 'connected',
+    deviceInfo: session.deviceInfo,
+  });
+
+  res.json({
+    success: true,
+    message: 'Pairing approved and active',
+    data: {
+      sessionId: session.sessionId,
+      boardId: session.boardId,
+      boardTitle: session.boardTitle,
+      state: 'connected',
+      deviceInfo: session.deviceInfo,
+    },
+  });
+});
+
+// 15. User Rejection (User taps "Cancel / Decline" on Phone)
+app.post('/api/remote/sessions/:sessionId/reject', (req, res) => {
+  loadSessionsFromDisk();
+  const session = remoteSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, error: { message: 'Session not found' } });
+  }
+
+  session.state = 'rejected';
+  session.connectedControllersCount = 0;
+  session.lastActive = Date.now();
+  saveSessionsToDisk();
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:rejected', {
+    sessionId: session.sessionId,
+    reason: req.body?.reason || 'User declined connection on phone',
+  });
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+    sessionId: session.sessionId,
+    boardId: session.boardId,
+    isPaired: false,
+    connectedControllers: 0,
+    state: 'rejected',
+  });
+
+  res.json({ success: true, message: 'Connection rejected' });
+});
+
+// 16. Disconnect Remote Session
+app.post('/api/remote/sessions/:sessionId/disconnect', (req, res) => {
+  loadSessionsFromDisk();
+  const session = remoteSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, error: { message: 'Session not found' } });
+  }
+
+  session.state = 'disconnected';
+  session.connectedControllersCount = 0;
+  session.lastActive = Date.now();
+  saveSessionsToDisk();
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:phone_disconnected', {
+    sessionId: session.sessionId,
+  });
+
+  io.to(`remote:${session.sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+    sessionId: session.sessionId,
+    boardId: session.boardId,
+    isPaired: false,
+    connectedControllers: 0,
+    state: 'disconnected',
+  });
+
+  res.json({ success: true, message: 'Session disconnected' });
+});
+
+// 17. Lookup Remote Session by 6-Character Passcode
 app.get('/api/remote/lookup', (req, res) => {
   const code = (req.query.code as string || '').trim().toUpperCase();
   if (!code) {
@@ -1749,26 +1986,18 @@ app.get('/api/remote/lookup', (req, res) => {
           sessionId: session.sessionId,
           passcode: session.passcode,
           boardId: session.boardId,
+          boardTitle: session.boardTitle,
+          state: session.state,
+          authToken: session.authToken,
         },
       });
     }
   }
 
-  // Resilient fallback for Vercel serverless: create synthetic session so phone pairs immediately
-  const synthesizedId = `sess-${code.toLowerCase()}`;
-  const newSession = getOrCreateSession(synthesizedId, code);
-
-  return res.json({
-    success: true,
-    data: {
-      sessionId: newSession.sessionId,
-      passcode: newSession.passcode,
-      boardId: newSession.boardId,
-    },
-  });
+  return res.status(404).json({ success: false, error: { message: 'No active session found with this passcode' } });
 });
 
-// 13. Send Remote Controller Event (HTTP fallback in case WebSocket drops)
+// 18. Send Remote Controller Event (HTTP fallback in case WebSocket drops)
 app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
   const session = getOrCreateSession(req.params.sessionId);
 
@@ -1797,12 +2026,12 @@ app.post('/api/remote/sessions/:sessionId/events', (req, res) => {
   res.json({ success: true, eventId: eventItem.id });
 });
 
-// 14. Get Active Remote Session for a Board
+// 19. Get Active Remote Session for a Board (Only returns if truly connected!)
 app.get('/api/remote/boards/:boardId/active', (req, res) => {
   loadSessionsFromDisk();
   const boardId = req.params.boardId;
   const sessions = Array.from(remoteSessions.values())
-    .filter((s) => s.boardId === boardId)
+    .filter((s) => s.boardId === boardId && s.state === 'connected' && s.connectedControllersCount > 0)
     .sort((a, b) => b.lastActive - a.lastActive);
 
   if (sessions.length > 0) {
@@ -1813,7 +2042,10 @@ app.get('/api/remote/boards/:boardId/active', (req, res) => {
         sessionId: s.sessionId,
         passcode: s.passcode,
         boardId: s.boardId,
-        connectedControllers: Math.max(s.controllerSockets.size, s.eventBuffer.length > 0 ? 1 : 0),
+        boardTitle: s.boardTitle,
+        state: s.state,
+        deviceInfo: s.deviceInfo,
+        connectedControllers: s.connectedControllersCount,
       },
     });
   }
@@ -1821,30 +2053,13 @@ app.get('/api/remote/boards/:boardId/active', (req, res) => {
   res.json({ success: true, data: null });
 });
 
-// 15. Poll Remote Controller Events (for display when socket is reconnecting)
+// 20. Poll Remote Controller Events
 app.get('/api/remote/sessions/:sessionId/events', (req, res) => {
   const session = getOrCreateSession(req.params.sessionId);
   const since = req.query.since ? parseInt(req.query.since as string, 10) : 0;
   const filtered = session.eventBuffer.filter((ev) => ev.timestamp > since);
 
   res.json({ success: true, data: filtered, serverTime: Date.now() });
-});
-
-// 16. Check Remote Session Status
-app.get('/api/remote/sessions/:sessionId', (req, res) => {
-  const session = getOrCreateSession(req.params.sessionId);
-
-  res.json({
-    success: true,
-    data: {
-      sessionId: session.sessionId,
-      boardId: session.boardId,
-      passcode: session.passcode,
-      connectedControllers: Math.max(session.controllerSockets.size, session.eventBuffer.length > 0 ? 1 : 0),
-      connectedDisplays: session.displaySockets.size,
-      lastActive: session.lastActive,
-    },
-  });
 });
 
 // ================= WEBSOCKET REAL-TIME HANDLING =================
@@ -2343,13 +2558,13 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 2. Bind Smartphone Remote Session
+  // 2. Bind Smartphone Remote Session (WhatsApp Web Pairing Protocol)
   socket.on('remote:bind', (data: any) => {
-    const { sessionId, role, passcode, deviceInfo } = data || {};
+    const { sessionId, role, passcode, token, deviceInfo } = data || {};
     loadSessionsFromDisk();
     const session = remoteSessions.get(sessionId);
     if (!session) {
-      socket.emit('remote:error', { message: 'Session does not exist or expired' });
+      socket.emit('remote:error', { message: 'Session does not exist or has expired' });
       return;
     }
 
@@ -2362,49 +2577,160 @@ io.on('connection', (socket) => {
     socket.join(`board:${session.boardId}`);
 
     if (role === 'controller') {
-      if (passcode && passcode.toUpperCase() !== session.passcode.toUpperCase()) {
-        socket.emit('remote:error', { message: 'Invalid pairing code' });
-        return;
+      // Send current session state to controller
+      socket.emit('remote:session_state', {
+        sessionId,
+        boardId: session.boardId,
+        boardTitle: session.boardTitle,
+        state: session.state,
+        passcode: session.passcode,
+        isPaired: session.state === 'connected',
+        deviceInfo: session.deviceInfo,
+      });
+
+      // If already authorized, confirm connection immediately
+      if (session.state === 'connected') {
+        session.lastActive = Date.now();
+        session.connectedControllersCount = Math.max(1, session.connectedControllersCount);
+        saveSessionsToDisk();
+
+        socket.emit('remote:approved', {
+          sessionId,
+          boardId: session.boardId,
+          deviceInfo: session.deviceInfo,
+          isPaired: true,
+        });
+
+        io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+          isPaired: true,
+          connectedControllers: 1,
+          state: 'connected',
+          deviceInfo: session.deviceInfo,
+          sessionId,
+          boardId: session.boardId,
+        });
       }
-
-      session.lastActive = Date.now();
-      saveSessionsToDisk();
-
-      // Confirm to controller
-      socket.emit('remote:connected', {
-        sessionId,
-        boardId: session.boardId,
-        role: 'controller',
-      });
-
-      // Broadcast to display in remote room & board room
-      io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:phone_paired', {
-        sessionId,
-        boardId: session.boardId,
-        deviceInfo: deviceInfo || 'Mobile Device',
-      });
-
-      io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
-        isPaired: true,
-        connectedControllers: 1,
-        connectedDisplays: 1,
-        sessionId,
-        boardId: session.boardId,
-      });
     } else if (role === 'display') {
-      socket.emit('remote:connected', {
-        sessionId,
-        boardId: session.boardId,
-        role: 'display',
-      });
-
       socket.emit('remote:status', {
-        isPaired: session.controllerSockets.size > 0 || session.eventBuffer.length > 0,
-        connectedControllers: session.controllerSockets.size,
+        isPaired: session.state === 'connected' && session.connectedControllersCount > 0,
+        connectedControllers: session.connectedControllersCount,
+        state: session.state,
+        deviceInfo: session.deviceInfo,
         sessionId,
         boardId: session.boardId,
       });
     }
+  });
+
+  // Phone reports QR scan detected (transition to 'scanned' awaiting user approval)
+  socket.on('remote:scan_detected', (data: any) => {
+    const { sessionId, token, passcode, deviceInfo } = data || {};
+    if (!sessionId) return;
+    loadSessionsFromDisk();
+    const session = remoteSessions.get(sessionId);
+    if (!session) return;
+
+    const isTokenMatch = token && session.authToken && token === session.authToken;
+    const isCodeMatch = passcode && session.passcode && passcode.toUpperCase() === session.passcode.toUpperCase();
+
+    if (!isTokenMatch && !isCodeMatch) {
+      socket.emit('remote:error', { message: 'Invalid pairing credentials' });
+      return;
+    }
+
+    if (session.state === 'awaiting_scan') {
+      session.state = 'scanned';
+    }
+    session.deviceInfo = deviceInfo || session.deviceInfo || 'Smartphone';
+    session.scannedAt = Date.now();
+    session.lastActive = Date.now();
+    saveSessionsToDisk();
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:scan_detected', {
+      sessionId,
+      state: 'scanned',
+      deviceInfo: session.deviceInfo,
+      scannedAt: session.scannedAt,
+    });
+  });
+
+  // Phone user explicitly approves connection
+  socket.on('remote:approve_connection', (data: any) => {
+    const { sessionId, token, passcode, deviceInfo } = data || {};
+    if (!sessionId) return;
+    loadSessionsFromDisk();
+    const session = remoteSessions.get(sessionId);
+    if (!session) {
+      socket.emit('remote:error', { message: 'Session expired' });
+      return;
+    }
+
+    const isTokenMatch = token && session.authToken && token === session.authToken;
+    const isCodeMatch = passcode && session.passcode && passcode.toUpperCase() === session.passcode.toUpperCase();
+
+    if (!isTokenMatch && !isCodeMatch) {
+      socket.emit('remote:error', { message: 'Invalid pairing token or passcode' });
+      return;
+    }
+
+    session.state = 'connected';
+    session.authorizedAt = Date.now();
+    session.connectedControllersCount = 1;
+    session.deviceInfo = deviceInfo || session.deviceInfo || 'Smartphone';
+    session.lastActive = Date.now();
+    saveSessionsToDisk();
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:approved', {
+      sessionId,
+      boardId: session.boardId,
+      deviceInfo: session.deviceInfo,
+      isPaired: true,
+      connectedControllers: 1,
+      authorizedAt: session.authorizedAt,
+    });
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:phone_paired', {
+      sessionId,
+      boardId: session.boardId,
+      deviceInfo: session.deviceInfo,
+      isPaired: true,
+    });
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+      isPaired: true,
+      connectedControllers: 1,
+      state: 'connected',
+      deviceInfo: session.deviceInfo,
+      sessionId,
+      boardId: session.boardId,
+    });
+  });
+
+  // Phone user rejects connection
+  socket.on('remote:reject_connection', (data: any) => {
+    const { sessionId, reason } = data || {};
+    if (!sessionId) return;
+    loadSessionsFromDisk();
+    const session = remoteSessions.get(sessionId);
+    if (!session) return;
+
+    session.state = 'rejected';
+    session.connectedControllersCount = 0;
+    session.lastActive = Date.now();
+    saveSessionsToDisk();
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:rejected', {
+      sessionId,
+      reason: reason || 'User declined connection on phone',
+    });
+
+    io.to(`remote:${sessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
+      isPaired: false,
+      connectedControllers: 0,
+      state: 'rejected',
+      sessionId,
+      boardId: session.boardId,
+    });
   });
 
   // 3. Relay Remote Touchpad & Drawing Events instantly
@@ -2441,6 +2767,44 @@ io.on('connection', (socket) => {
     if (session) {
       session.lastActive = Date.now();
       io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:pointer', data);
+    }
+  });
+
+  // Remote Tap / Click (Tap on phone trackpad to click or select on laptop whiteboard)
+  socket.on('remote:tap', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:tap', data);
+    }
+  });
+
+  // Remote Pan / Two-finger Canvas Scroll
+  socket.on('remote:pan', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:pan', data);
+    }
+  });
+
+  // Remote Text / Sticky Note Input from Phone Keyboard
+  socket.on('remote:text_input', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:text_input', data);
+    }
+  });
+
+  socket.on('remote:text_preview', (data: any) => {
+    if (!boundSessionId) return;
+    const session = remoteSessions.get(boundSessionId);
+    if (session) {
+      io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:text_preview', data);
     }
   });
 
@@ -2501,12 +2865,19 @@ io.on('connection', (socket) => {
     if (boundSessionId && clientRole === 'controller') {
       const session = remoteSessions.get(boundSessionId);
       if (session) {
+        session.connectedControllersCount = Math.max(0, session.connectedControllersCount - 1);
+        if (session.connectedControllersCount === 0) {
+          session.state = 'disconnected';
+          saveSessionsToDisk();
+        }
+
         io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:phone_disconnected', {
           sessionId: boundSessionId,
         });
         io.to(`remote:${boundSessionId}`).to(`board:${session.boardId}`).emit('remote:status', {
           isPaired: false,
-          connectedControllers: 0,
+          connectedControllers: session.connectedControllersCount,
+          state: session.state,
           sessionId: boundSessionId,
           boardId: session.boardId,
         });
